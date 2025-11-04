@@ -2,7 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-// import 'package:auralens/src/app.dart'; // (곧 생성할 파일)
+import 'package:auralens/src/app.dart';
 // import 'package:auralens/src/services/camera_service.dart';
 // import 'package:auralens/src/services/tflite_service.dart';
 
