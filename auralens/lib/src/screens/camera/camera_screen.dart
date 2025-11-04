@@ -1,0 +1,2 @@
+// camera package is used to access the device camera and display the CameraPreview (startImageStream)
+// Using Stack widget to overlay detection results on top of the CameraPreview. Consumer is used to listen to CameraViewModel for updates. (detection results)

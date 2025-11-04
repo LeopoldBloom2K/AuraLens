@@ -1,0 +1,1 @@
+// This screen allows users to anounce license information used in the app.

@@ -1,0 +1,102 @@
+핵심 서비스 구현 (백그라운드 로직)
+UI와 비즈니스 로직을 분리하기 위해 lib/src/services/ 폴더에 핵심 기능들을 서비스 클래스로 구현합니다.
+
+권한 관리 (utils/permissions.dart): permission_handler 패키지를 사용하여 앱 시작 시 카메라 및 저장소(갤러리 저장용) 권한을 요청하는 함수를 구현합니다.
+
+TFLite 서비스 (services/tflite_service.dart):
+
+tflite_flutter 패키지를 사용하여 assets/models/에 있는 TFLite 모델과 레이블 파일을 불러오는 loadModel() 함수를 구현합니다.
+
+카메라 이미지 스트림을 받아 추론을 실행하는 runModelOnFrame(CameraImage image) 같은 함수를 구현합니다.
+
+카메라 서비스 (services/camera_service.dart):
+
+camera 패키지의 CameraController를 초기화(initialize)하는 로직을 구현합니다.
+
+카메라 미리보기를 위한 실시간 이미지 스트림을 시작(startImageStream)하고 정지하는 함수를 구현합니다.
+
+
+
+
+
+
+3단계: 카메라 화면 및 실시간 추론 연동
+이제 실제 카메라 화면을 만들고, 2단계에서 만든 서비스들을 Provider 상태 관리를 통해 연동합니다.
+
+데이터 모델 정의 (models/detection_result.dart): TFLite 추론 결과를 담을 Dart 클래스를 정의합니다 (예: DetectionResult 클래스, 바운딩 박스 좌표, 클래스 이름, 신뢰도 포함).
+
+이미지 변환 유틸 (utils/image_converter.dart):
+
+카메라 스트림에서 받은 CameraImage (주로 YUV 형식)를 TFLite 모델이 요구하는 RGB 형식의 ByteBuffer로 변환하는 헬퍼 함수를 구현합니다.
+
+image 패키지가 이 변환 작업에 유용하게 사용될 수 있습니다.
+
+상태 관리 (screens/camera/camera_view_model.dart):
+
+Provider를 사용할 ChangeNotifier 클래스(뷰모델)를 생성합니다.
+
+이 클래스 내에서 CameraService와 TFLiteService를 초기화하고, startImageStream을 구독(listen)합니다.
+
+핵심 추론 루프 (View Model 내부):
+
+카메라 스트림에서 CameraImage가 들어올 때마다,
+
+image_converter로 이미지를 TFLite 입력 형식으로 변환합니다.
+
+tflite_service.runModelOnFrame()을 호출하여 추론을 실행합니다.
+
+반환된 DetectionResult 리스트를 뷰모델의 상태 변수(예: List<DetectionResult> detections)에 저장하고 notifyListeners()를 호출합니다.
+
+카메라 UI 구현 (screens/camera/camera_screen.dart):
+
+Stack 위젯을 사용하여 CameraPreview를 배경에 깔아줍니다.
+
+Consumer 위젯으로 뷰모델의 detections 상태를 구독합니다.
+
+
+
+
+
+
+4단계: 동적 구도 가이드 구현
+README.md의 핵심 기능인 "동적 구도 가이드"를 CustomPaint로 구현합니다.
+
+구도 계산 로직 (services/composition_service.dart):
+
+3단계에서 감지된 객체(예: 'person')의 바운딩 박스 좌표(DetectionResult)를 입력받습니다.
+
+이 피사체를 "3분할" 또는 "황금 비율"의 '파워 포인트'에 맞추기 위해 가이드라인이 그려져야 할 목표 좌표를 계산하는 로직을 구현합니다.
+
+커스텀 페인터 (widgets/composition_overlay_painter.dart):
+
+CustomPaint 위젯에서 사용할 CustomPainter를 구현합니다.
+
+이 페인터는 뷰모델로부터 현재 감지된 객체의 실제 좌표와 CompositionService가 계산한 목표 좌표를 모두 전달받습니다.
+
+canvas.drawLine, canvas.drawRect 등을 사용해 3분할 그리드와 황금 나선, 그리고 객체 타겟팅 가이드를 화면에 그립니다.
+
+시각적 피드백 구현:
+
+README.md에서 언급한 "직관적인 UI 제공" (가이드에 맞추면 색상 변경 등)을 구현합니다.
+
+뷰모델에서 피사체의 실제 좌표와 목표 좌표가 일정 범위 내로 가까워졌는지 확인하는 isCompositionCorrect 같은 bool 변수를 둡니다.
+
+CustomPainter는 이 isCompositionCorrect 값에 따라 가이드라인의 색상을 (예: 흰색 -> 녹색) 변경하도록 구현합니다.
+
+
+
+
+
+
+5단계: 사진 촬영 및 부가 기능
+사진 촬영 및 저장:
+
+UI에 촬영 버튼을 추가하고, 탭(tap) 시 cameraController.takePicture()를 호출합니다.
+
+촬영된 이미지 파일(XFile)을 gallery_saver 패키지를 사용하여 사용자의 갤러리에 저장합니다.
+
+설정 화면 (screens/settings/settings_screen.dart):
+
+README.md의 라이선스 섹션에서 언급된 대로, 사용된 AI 모델의 라이선스(예: Apache 2.0)와 앱의 MIT 라이선스를 고지하는 간단한 설정 화면을 구현합니다.
+
+이 단계들을 순서대로 진행하면 README.md에 정의된 AuraLens 앱의 핵심 기능을 완성할 수 있습니다. 이미 pubspec.yaml에 필요한 모든 의존성이 준비되어 있으므로, 이제 lib/ 폴더 내의 코드 작성에 집중하시면 됩니다.
