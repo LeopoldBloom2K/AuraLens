@@ -1,7 +1,7 @@
 // lib/src/app.dart
 
 import 'package:flutter/material.dart';
-// import 'package:auralens/src/screens/camera/camera_screen.dart'; // (곧 생성할 파일)
+import 'package:auralens/src/screens/camera/camera_screen.dart';
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});

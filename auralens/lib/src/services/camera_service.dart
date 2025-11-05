@@ -10,6 +10,7 @@ class CameraService with ChangeNotifier {
   CameraController? _controller;
   CameraController? get controller => _controller;
 
+  // 이거는 이해 안 감
   CameraImage? _cameraImage;
   CameraImage? get cameraImage => _cameraImage;
 
@@ -32,7 +33,7 @@ class CameraService with ChangeNotifier {
       final camera = cameras.first; // 첫 번째 카메라(보통 후면) 사용
 
       _controller = CameraController(
-        camera,
+        camera, // 후면 카메라
         ResolutionPreset.high, // 고해상도 (모델 성능에 따라 조절)
         enableAudio: false,     // 오디오 비활성화
         imageFormatGroup: ImageFormatGroup.bgra8888, // iOS/Android 호환 형식 (또는 yuv420)
@@ -40,13 +41,11 @@ class CameraService with ChangeNotifier {
 
       await _controller!.initialize();
       _isCameraInitialized = true;
-      log('카메라 초기화 성공');
-      notifyListeners();
-
     } catch (e) {
       log('카메라 초기화 실패: $e');
       _isCameraInitialized = false;
     }
+    notifyListeners();
   }
 
   /// 카메라 이미지 스트림을 시작합니다.

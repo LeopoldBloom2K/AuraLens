@@ -4,39 +4,38 @@
 
 import 'package:camera/camera.dart'; //
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:provider/provider.dart'; //
-// import 'package:auralens/src/screens/camera/camera_view_model.dart';
-// import 'package:auralens/src/services/camera_service.dart';
-// import 'package:auralens/src/services/tflite_service.dart';
-// import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
+import 'package:auralens/src/screens/camera/camera_view_model.dart';
+import 'package:auralens/src/services/camera_service.dart';
+import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
 
 /// README의 메인 카메라 UI 스크린
+/// ViewModel을 주입하는 역할을 합니다.
 class CameraScreen extends StatelessWidget {
   const CameraScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // ViewModel을 이 스크린에 주입합니다.
-    // ViewModel은 Context.read를 통해 main.dart에서 제공된 Service들을 참조합니다.
+    // ViewModel을 이 스크린 위젯 트리에 주입합니다.
+    // ViewModel은 Context.read를 통해 main.dart에서 제공된 CameraService를 참조합니다.
     return ChangeNotifierProvider(
       create: (context) => CameraViewModel(
         context.read<CameraService>(),
-        context.read<TFLiteService>(),
       ),
       child: const CameraView(),
     );
   }
 }
 
-/// 실제 카메라 UI를 렌더링하는 위젯
+/// 실제 카메라 UI를 렌더링하고 ViewModel의 상태를 구독하는 위젯
 class CameraView extends StatelessWidget {
   const CameraView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // ViewModel의 상태를 구독(watch)합니다.
-    final cameraViewModel = context.watch<CameraViewModel>();
-    final cameraService = cameraViewModel.cameraService;
+    // ViewModel의 상태 변경을 구독(watch)합니다.
+    final cameraService = context.watch<CameraViewModel>().cameraService;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -83,34 +82,56 @@ class CameraView extends StatelessWidget {
   }
 
   /// 카메라 미리보기와 구도 가이드를 겹쳐서 보여주는 위젯
-
+  Widget _buildCameraPreview(
       BuildContext context, CameraController controller) {
-
-    // 1. ViewModel에서 Detections 리스트 구독
-    final detections = context.watch<CameraViewModel>().detections;
+    
+    // 1. ViewModel에서 ML Kit 결과 및 모든 상태 구독
+    final List<DetectedObject> detections =
+        context.watch<CameraViewModel>().detections;
+    final Size? imageSize = context.watch<CameraViewModel>().imageSize;
+    final Offset? compositionTarget =
+        context.watch<CameraViewModel>().compositionTarget;
+    final bool isCompositionCorrect =
+        context.watch<CameraViewModel>().isCompositionCorrect;
 
     // 2. 카메라 프리뷰의 실제 종횡비(AspectRatio) 계산
     final cameraValue = controller.value;
     final cameraAspectRatio = cameraValue.aspectRatio;
 
-    // 3. 카메라 프리뷰 사이즈 (CustomPaint에 전달하기 위함)
-    final cameraPreviewSize = cameraValue.previewSize!;
-
     return Stack(
       fit: StackFit.expand, // Stack을 화면에 꽉 채움
       children: [
-        // 레이어 1: 카메라 미리보기
+        // 레이어 1: 카메라 미리보기 (종횡비 유지)
         Center(
-          child: CameraPreview(controller),
-        ),
-
-        // 레이어 2: 3분할 가이드 및 AI 가이드 오버레이
-        CustomPaint(
-          painter: CompositionOverlayPainter(
-              detections: detections, // ViewModel의 감지 결과 전달
-              cameraPreviewSize: cameraPreviewSize, // 프리뷰 원본 사이즈 전달
+          child: AspectRatio(
+            aspectRatio: cameraAspectRatio,
+            child: CameraPreview(controller),
           ),
         ),
+
+        // 레이어 2: AI 오버레이 (LayoutBuilder로 정확한 UI 크기 계산)
+        LayoutBuilder(
+          builder: (context, constraints) {
+            // 현재 UI 위젯의 크기
+            final widgetSize =
+                Size(constraints.maxWidth, constraints.maxHeight);
+
+            // ViewModel에 현재 UI 크기를 알려줌 (좌표 계산용)
+            context.read<CameraViewModel>().setScreenSize(widgetSize);
+
+            // 3. CustomPaint에 모든 상태 전달
+            return CustomPaint(
+              painter: CompositionOverlayPainter(
+                detections: detections,
+                imageSize: imageSize,       // 카메라 이미지 원본 크기
+                widgetSize: widgetSize,     // 현재 UI 위젯 크기
+                compositionTarget: compositionTarget,
+                isCompositionCorrect: isCompositionCorrect,
+              ),
+            );
+          },
+        ),
+
         // 레이어 3: 설정 버튼 등 기타 UI
         Positioned(
           top: 50,
@@ -118,7 +139,8 @@ class CameraView extends StatelessWidget {
           child: IconButton(
             icon: const Icon(Icons.settings, color: Colors.white, size: 30),
             onPressed: () {
-              // TODO: README의 'settings_screen.dart'로 이동
+              // TODO: (다음 단계) README의 'settings_screen.dart'로 이동
+              // 예: Navigator.push(context, MaterialPageRoute(...));
             },
           ),
         ),

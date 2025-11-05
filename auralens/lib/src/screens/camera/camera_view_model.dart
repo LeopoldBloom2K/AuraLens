@@ -1,42 +1,52 @@
-// lib/src/screens/camera/camera_view_model.dart
+// lib/src/screens/camera/camera_view_model.dart  tflitemodel -> google ML kit으로 변경
 
 import 'dart:developer';
-import 'package:flutter/foundation.dart';
+import 'dart:io'; // Platform 확인
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // SystemChrome
 import 'package:camera/camera.dart';
-import 'package:provider/provider.dart'; //
-// import 'package:auralens/src/models/detection_result.dart';
-// import 'package:auralens/src/services/camera_service.dart';
-// import 'package:auralens/src/services/tflite_service.dart';
-// import 'package:auralens/src/utils/image_converter.dart';
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:gallery_saver/gallery_saver.dart';
+import 'package:auralens/src/services/camera_service.dart';
+import 'package:auralens/src/services/composition_service.dart';
 
-/// CameraScreen의 상태와 비즈니스 로직을 관리하는 ViewModel
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
-  final TFLiteService _tfliteService;
-  
-  // 1. CompositionService 인스턴스 생성
   final CompositionService _compositionService = CompositionService();
 
-  CameraViewModel(this._cameraService, this._tfliteService) {
-    _cameraService.addListener(notifyListeners);
-    _startModelInference();
-  }
+  // ML Kit ObjectDetector 인스턴스
+  late final ObjectDetector _objectDetector;
 
   bool _isDetecting = false;
-  List<DetectionResult> _detections = [];
-  
-  // 2. 새로운 상태 변수 추가
-  Offset? _compositionTarget; // 구도 목표 지점 (Painter가 사용)
-  bool _isCompositionCorrect = false; // 구도 일치 여부 (Painter가 사용)
-  Size _screenSize = Size.zero; // 화면 크기 (계산에 필요)
+  List<DetectedObject> _detections = []; // ML Kit의 모델을 직접 사용
+  Offset? _compositionTarget;
+  bool _isCompositionCorrect = false;
+  Size _screenSize = Size.zero;
+  Size? _imageSize; // 카메라 이미지 원본 크기
 
-  // 3. UI가 구독할 Getter 추가
-  List<DetectionResult> get detections => _detections;
+  // UI가 구독할 Getter
+  List<DetectedObject> get detections => _detections;
   CameraService get cameraService => _cameraService;
   Offset? get compositionTarget => _compositionTarget;
   bool get isCompositionCorrect => _isCompositionCorrect;
-  
-  // 4. 화면 크기 업데이트 함수 (UI에서 호출)
+  Size? get imageSize => _imageSize; // Painter의 좌표 스케일링에 필요
+
+  CameraViewModel(this._cameraService) {
+    _cameraService.addListener(notifyListeners);
+
+    // 1. ML Kit ObjectDetector 초기화
+    // 기본 "Stream" 모드, 'person'만 감지하도록 설정
+    final options = ObjectDetectorOptions(
+      mode: DetectionMode.stream,
+      classifyObjects: true,
+      multipleObjects: true,
+    );
+    _objectDetector = ObjectDetector(options: options);
+
+    // 2. 추론 루프 시작
+    _startModelInference();
+  }
+
   void setScreenSize(Size size) {
     if (_screenSize == Size.zero) {
       _screenSize = size;
@@ -44,92 +54,82 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-  /// 모델 추론 스트림을 시작합니다.
   void _startModelInference() {
-    log('CameraViewModel: 모델 추론 루프 시작');
-    _cameraService.startImageStream((CameraImage cameraImage) {
-      if (_isDetecting) return; // 이전 추론이 진행 중이면 스킵
+    log('CameraViewModel: ML Kit 추론 루프 시작');
+    _cameraService.startImageStream((CameraImage cameraImage) async {
+      if (_isDetecting || _screenSize == Size.zero) return;
 
       _isDetecting = true;
-      
-      // 비동기 추론 실행
-      _runInference(cameraImage);
+      try {
+        // ML Kit가 요구하는 InputImage로 변환
+        final InputImage? inputImage =
+            _inputImageFromCameraImage(cameraImage);
+        if (inputImage == null) return;
+
+        // 이미지 크기 저장 (Painter의 스케일링 계산용)
+        _imageSize = inputImage.metadata?.size;
+
+        // 3. ML Kit로 이미지 처리
+        final List<DetectedObject> results =
+            await _objectDetector.processImage(inputImage);
+
+        // 4. 'person' 레이블 필터링
+        final List<DetectedObject> personDetections = results
+            .where((obj) => obj.labels
+                .any((label) => label.text.toLowerCase() == 'person'))
+            .toList();
+
+        // 5. 구도 계산
+        _updateComposition(personDetections);
+
+        // 6. 상태 업데이트
+        _detections = personDetections;
+      } catch (e) {
+        log('ML Kit 추론 실패: $e');
+      } finally {
+        notifyListeners();
+        _isDetecting = false;
+      }
     });
   }
 
-  /// 실제 추론을 실행하고 상태를 업데이트합니다.
-  Future<void> _runInference(CameraImage cameraImage) async {
-    // 1. 이미지 변환 (모델 입력 형식에 맞게)
-    //    MobileNet-SSD float 모델 (입력 -1.0 ~ 1.0) 기준
-    final Float32List inputBytes = ImageConverter.convertCameraImageToTFLiteInput(
-      cameraImage,
-      modelInputSize, // 300
-      127.5,          // Mean
-      127.5,          // Std
-    );
-
-    // 2. TFLite 서비스로 추론 실행
-    //    (TFLiteService의 runModelOnFrame이 Uint8List 대신 Float32List를 받도록 수정 필요)
-    //    ** 중요: TFLiteService의 runModelOnFrame의 인자 타입을
-    //    ** Uint8List -> Float32List로 변경해야 합니다.
-    
-    // (TFLiteService가 수정되었다고 가정)
-    // final List<DetectionResult> results = 
-    //     _tfliteService.runModelOnFrame(inputBytes);
-
-    // (임시) TFLiteService가 아직 수정되지 않았다면,
-    // TFLiteService의 runModelOnFrame 내부에서 Uint8List.view(inputBytes.buffer)로 캐스팅
-    // 여기서는 inputBytes가 Uint8List라고 가정하고 이전 코드 실행
-    // (이전 단계의 TFLiteService가 Uint8List를 받으므로)
-    
-    final List<DetectionResult> results = 
-        _tfliteService.runModelOnFrame(Uint8List.view(inputBytes.buffer));
-        
-        // 5. 구도 계산 로직 추가
-    if (results.isNotEmpty) {
-      // 첫 번째 감지된 사람의 바운딩 박스 (절대 좌표)
-      final Rect detectionBox = Rect.fromLTRB(
-        results.first.boundingBox.left * _screenSize.width,
-        results.first.boundingBox.top * _screenSize.height,
-        results.first.boundingBox.right * _screenSize.width,
-        results.first.boundingBox.bottom * _screenSize.height,
-      );
-
-      // 5-1. 목표 지점 계산
-      _compositionTarget = _compositionService.findClosestPowerPoint(
-        detectionBox, 
-        _screenSize,
-      );
+  /// ML Kit에 최적화된 구도 계산
+  void _updateComposition(List<DetectedObject> personDetections) {
+    if (personDetections.isNotEmpty && _imageSize != null) {
+      // ML Kit는 이미지 원본 기준 절대 좌표(Rect)를 반환
+      final Rect imageBox = personDetections.first.boundingBox;
       
-      // 5-2. 구도 일치 여부 계산
-      _isCompositionCorrect = _compositionService.isCompositionCorrect(
-        detectionBox, 
-        _compositionTarget, 
-        _screenSize,
+      // TODO: (중요) Painter에서 스케일링을 하므로 여기서는 상대 좌표로 변환
+      // (이 부분은 Painter에서 처리하는 것이 더 정확함)
+      
+      // ViewModel은 UI 좌표계로 변환하여 CompositionService에 전달
+      final Rect scaledBox = _scaleRect(
+        rect: imageBox,
+        imageSize: _imageSize!,
+        widgetSize: _screenSize,
       );
 
+      _compositionTarget =
+          _compositionService.findClosestPowerPoint(scaledBox, _screenSize);
+      _isCompositionCorrect = _compositionService.isCompositionCorrect(
+          scaledBox, _compositionTarget, _screenSize);
     } else {
-      // 감지된 객체가 없으면 타겟과 피드백 초기화
       _compositionTarget = null;
       _isCompositionCorrect = false;
     }
-
-    // 3. 상태 업데이트 및 UI 알림
-    _detections = results;
-    notifyListeners();
-
-    // 4. 플래그 해제
-    _isDetecting = false;
   }
 
   /// 사진 촬영
   Future<void> takePicture() async {
-    // 갤러리 저장 로직
     final XFile? photo = await _cameraService.takePicture();
     if (photo != null) {
-      // gallery_saver 패키지로 저장
-      // await GallerySaver.saveImage(photo.path);
-      log('사진 촬영 및 저장 완료: ${photo.path}');
+      try {
+        await GallerySaver.saveImage(photo.path);
+        log('사진 저장 성공: ${photo.path}');
+        // TODO: 사용자에게 "저장 완료" 피드백 (Snackbar 등)
+      } catch (e) {
+        log('사진 저장 실패: $e');
+      }
     }
   }
 
@@ -138,6 +138,61 @@ class CameraViewModel with ChangeNotifier {
     log('CameraViewModel 해제');
     _cameraService.stopImageStream();
     _cameraService.removeListener(notifyListeners);
+    _objectDetector.close(); // ML Kit 리소스 해제
     super.dispose();
+  }
+
+  /// CameraImage를 ML Kit InputImage로 변환 (좌표 변환의 핵심)
+  ///
+  InputImage? _inputImageFromCameraImage(CameraImage image) {
+    final camera = _cameraService.controller!.description;
+    final sensorOrientation = camera.sensorOrientation; // 90, 180, 270...
+    
+    InputImageRotation rotation;
+    if (Platform.isIOS) {
+      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ??
+          InputImageRotation.rotation0deg;
+    } else if (Platform.isAndroid) {
+      var rotationCompensation = (sensorOrientation + 360) % 360;
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation) ??
+          InputImageRotation.rotation0deg;
+    } else {
+      rotation = InputImageRotation.rotation0deg;
+    }
+
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    return InputImage.fromBytes(
+      bytes: image.planes[0].bytes, // YUV의 Y평면 (또는 BGRA)
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+  }
+
+  /// ML Kit 좌표(이미지 기준)를 UI 좌표(위젯 기준)로 스케일링
+  Rect _scaleRect({
+    required Rect rect,
+    required Size imageSize,
+    required Size widgetSize,
+  }) {
+    // (이 스케일링 로직은 CameraPreview가 'cover' 모드일 때를 가정한 것이며,
+    // 'contain' (AspectRatio) 모드에서는 더 복잡한 계산이 필요합니다.)
+    
+    final double scaleX = widgetSize.width / imageSize.width;
+    final double scaleY = widgetSize.height / imageSize.height;
+    
+    // TODO: AspectRatio에 맞춘 정확한 스케일링 필요
+    // (우선은 단순 비율로 계산)
+    return Rect.fromLTRB(
+      rect.left * scaleX,
+      rect.top * scaleY,
+      rect.right * scaleX,
+      rect.bottom * scaleY,
+    );
   }
 }

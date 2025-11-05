@@ -54,7 +54,7 @@ class CompositionService {
   ) {
     if (targetPoint == null || detectionBox.isEmpty) return false;
 
-    // 허용 오차 범위 (예: 화면 너비의 5%)
+    // 허용 오차 범위 (화면 너비의 5%) <- 조정 예정
     final double tolerance = screenSize.width * 0.05; 
     final Offset boxCenter = detectionBox.center;
 

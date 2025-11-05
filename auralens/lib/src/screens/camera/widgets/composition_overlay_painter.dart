@@ -3,82 +3,122 @@
 // lib/src/screens/camera/widgets/composition_overlay_painter.dart
 
 import 'package:flutter/material.dart';
-// import 'package:auralens/src/models/detection_result.dart'; // (다음 단계에서 사용)
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 
-/// 카메라 오버레이에 구도 가이드를 그리는 CustomPainter
 class CompositionOverlayPainter extends CustomPainter {
-  final List<DetectionResult> detections;
-  final Size cameraPreviewSize; // 카메라 프리뷰의 실제 크기
+  final List<DetectedObject> detections;
+  final Size? imageSize; // 카메라 이미지 원본 크기
+  final Size widgetSize; // UI 위젯(LayoutBuilder) 크기
+  final Offset? compositionTarget;
+  final bool isCompositionCorrect;
 
   CompositionOverlayPainter({
     required this.detections,
-    required this.cameraPreviewSize,
+    required this.imageSize,
+    required this.widgetSize,
+    this.compositionTarget,
+    required this.isCompositionCorrect,
   });
 
   @override
-  void paint(Canvas canvas, Size size) {  // size는 CustomPaint 위젯의 크기
-    // 3분할 가이드 페인트 설정
+  void paint(Canvas canvas, Size size) {
+    // size == widgetSize
+    
+    // --- 3분할 그리드 ---
     final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.4) // 반투명 흰색
+      ..color = Colors.white.withAlpha(182)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5; // 선 굵기
-
-    // --- 3분할 (Rule of Thirds) 가이드 그리기 ---
+      ..strokeWidth = 1.5;
+    // ... (3분할 선 그리기 로직 동일) ...
     final double thirdOfWidth = size.width / 3;
     final double thirdOfHeight = size.height / 3;
-// --- 바운딩 박스(Bounding Box) 그리기 ---
-    if (detections.isEmpty) return;
+    canvas.drawLine(Offset(thirdOfWidth, 0), Offset(thirdOfWidth, size.height), gridPaint);
+    canvas.drawLine(Offset(thirdOfWidth * 2, 0), Offset(thirdOfWidth * 2, size.height), gridPaint);
+    canvas.drawLine(Offset(0, thirdOfHeight), Offset(size.width, thirdOfHeight), gridPaint);
+    canvas.drawLine(Offset(0, thirdOfHeight * 2), Offset(size.width, thirdOfHeight * 2), gridPaint);
 
+
+    if (imageSize == null || detections.isEmpty) return;
+
+    // --- 바운딩 박스 & 레이블 ---
     final boxPaint = Paint()
-      ..color = Colors.yellowAccent // 감지된 객체 박스 색상
+      ..color = Colors.yellowAccent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.0;
-
-    final textStyle = TextStyle(
-      color: Colors.yellowAccent,
-      fontSize: 14,
-      backgroundColor: Colors.black.withOpacity(0.5),
-    );
-    
-    // 프리뷰와 화면 크기 비율 계산 (좌우 레터박스 대응)
-    final double scaleX = size.width / cameraPreviewSize.width;
-    final double scaleY = size.height / cameraPreviewSize.height;
-    // (이 예제는 프리뷰가 화면에 꽉 찬다고 가정하고 scale을 1로 단순화)
-    // (실제로는 AspectRatio에 맞춰 스케일링 필요)
+    final textStyle = TextStyle(color: Colors.yellowAccent, fontSize: 14);
 
     for (final detection in detections) {
-      // 1. TFLite 상대 좌표(0.0~1.0)를 화면 절대 좌표로 변환
-      final Rect absoluteBox = Rect.fromLTRB(
-        detection.boundingBox.left * size.width,
-        detection.boundingBox.top * size.height,
-        detection.boundingBox.right * size.width,
-        detection.boundingBox.bottom * size.height,
+      // ML Kit 좌표(이미지 기준) -> UI 좌표(위젯 기준)로 스케일링
+      final Rect absoluteBox = _scaleRect(
+        rect: detection.boundingBox,
+        imageSize: imageSize!,
+        widgetSize: widgetSize,
       );
 
-      // 2. 박스 그리기
       canvas.drawRect(absoluteBox, boxPaint);
-
-      // 3. 레이블 및 신뢰도 텍스트 그리기
+      
       final textSpan = TextSpan(
-        text: '${detection.label} ${(detection.confidence * 100).toStringAsFixed(0)}%',
-        style: textStyle,
-      );
+          text: '${detection.labels.first.text} ${(detection.labels.first.confidence * 100).toStringAsFixed(0)}%',
+          style: textStyle);
       final textPainter = TextPainter(
-        text: textSpan,
-        textAlign: TextAlign.left,
-        textDirection: TextDirection.ltr,
-      );
+          text: textSpan,
+          textAlign: TextAlign.left,
+          textDirection: TextDirection.ltr);
       textPainter.layout();
-      textPainter.paint(
-        canvas,
-        Offset(absoluteBox.left + 4, absoluteBox.top + 4), // 박스 좌상단에
-      );
+      textPainter.paint(canvas, Offset(absoluteBox.left + 4, absoluteBox.top + 4));
     }
+
+    // --- 동적 구도 타겟 & 시각적 피드백 ---
+    // (ViewModel이 이미 UI 스케일 기준으로 계산했으므로 로직 동일)
+    if (compositionTarget != null) {
+      final Color targetColor =
+          isCompositionCorrect ? Colors.greenAccent : Colors.white;
+      final targetPaint = Paint()
+        ..color = targetColor.withAlpha(204)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0;
+      const double targetRadius = 20.0;
+      canvas.drawLine(Offset(compositionTarget!.dx - targetRadius, compositionTarget!.dy),
+          Offset(compositionTarget!.dx + targetRadius, compositionTarget!.dy), targetPaint);
+      canvas.drawLine(Offset(compositionTarget!.dx, compositionTarget!.dy - targetRadius),
+          Offset(compositionTarget!.dx, compositionTarget!.dy + targetRadius), targetPaint);
+    }
+  }
+
+  /// ML Kit 좌표계(이미지)를 Flutter UI 좌표계(위젯)로 변환 (중요)
+  Rect _scaleRect({
+    required Rect rect,
+    required Size imageSize,
+    required Size widgetSize,
+  }) {
+    // CameraPreview는 기본적으로 'AspectRatio' 모드(contain)가 아니라
+    // 'cover' 모드(화면을 꽉 채움)로 작동하려는 경향이 있습니다.
+    // 여기서는 'AspectRatio' 위젯으로 'contain'을 강제했다고 가정합니다.
+    
+    final double scaleX = widgetSize.width / imageSize.width;
+    final double scaleY = widgetSize.height / imageSize.height;
+
+    // AspectRatio(contain) 모드를 가정하여, 더 작은 스케일 팩터를 사용 (레터박스 대응)
+    final double scale = scaleX < scaleY ? scaleX : scaleY;
+
+    final double offsetX = (widgetSize.width - imageSize.width * scale) / 2.0;
+    final double offsetY = (widgetSize.height - imageSize.height * scale) / 2.0;
+
+    return Rect.fromLTRB(
+      rect.left * scale + offsetX,
+      rect.top * scale + offsetY,
+      rect.right * scale + offsetX,
+      rect.bottom * scale + offsetY,
+    );
   }
 
   @override
   bool shouldRepaint(covariant CompositionOverlayPainter oldDelegate) {
-    // Detections 리스트가 변경되었을 때만 다시 그림 (최적화)
-    return oldDelegate.detections != detections;
+    // 상태가 변경되었을때만 다시 그리도록 최적화
+    return oldDelegate.detections != detections ||
+        oldDelegate.imageSize != imageSize ||
+        oldDelegate.widgetSize != widgetSize ||
+        oldDelegate.compositionTarget != compositionTarget ||
+        oldDelegate.isCompositionCorrect != isCompositionCorrect;
   }
 }
