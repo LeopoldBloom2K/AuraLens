@@ -62,21 +62,24 @@ class CameraViewModel with ChangeNotifier {
       _isDetecting = true;
       try {
         // ML Kit가 요구하는 InputImage로 변환
-        final InputImage? inputImage =
-            _inputImageFromCameraImage(cameraImage);
+        final InputImage? inputImage = _inputImageFromCameraImage(cameraImage);
         if (inputImage == null) return;
 
         // 이미지 크기 저장 (Painter의 스케일링 계산용)
         _imageSize = inputImage.metadata?.size;
 
         // 3. ML Kit로 이미지 처리
-        final List<DetectedObject> results =
-            await _objectDetector.processImage(inputImage);
+        final List<DetectedObject> results = await _objectDetector.processImage(
+          inputImage,
+        );
 
         // 4. 'person' 레이블 필터링
         final List<DetectedObject> personDetections = results
-            .where((obj) => obj.labels
-                .any((label) => label.text.toLowerCase() == 'person'))
+            .where(
+              (obj) => obj.labels.any(
+                (label) => label.text.toLowerCase() == 'person',
+              ),
+            )
             .toList();
 
         // 5. 구도 계산
@@ -98,10 +101,10 @@ class CameraViewModel with ChangeNotifier {
     if (personDetections.isNotEmpty && _imageSize != null) {
       // ML Kit는 이미지 원본 기준 절대 좌표(Rect)를 반환
       final Rect imageBox = personDetections.first.boundingBox;
-      
+
       // TODO: (중요) Painter에서 스케일링을 하므로 여기서는 상대 좌표로 변환
       // (이 부분은 Painter에서 처리하는 것이 더 정확함)
-      
+
       // ViewModel은 UI 좌표계로 변환하여 CompositionService에 전달
       final Rect scaledBox = _scaleRect(
         rect: imageBox,
@@ -109,10 +112,15 @@ class CameraViewModel with ChangeNotifier {
         widgetSize: _screenSize,
       );
 
-      _compositionTarget =
-          _compositionService.findClosestPowerPoint(scaledBox, _screenSize);
+      _compositionTarget = _compositionService.findClosestPowerPoint(
+        scaledBox,
+        _screenSize,
+      );
       _isCompositionCorrect = _compositionService.isCompositionCorrect(
-          scaledBox, _compositionTarget, _screenSize);
+        scaledBox,
+        _compositionTarget,
+        _screenSize,
+      );
     } else {
       _compositionTarget = null;
       _isCompositionCorrect = false;
@@ -147,14 +155,16 @@ class CameraViewModel with ChangeNotifier {
   InputImage? _inputImageFromCameraImage(CameraImage image) {
     final camera = _cameraService.controller!.description;
     final sensorOrientation = camera.sensorOrientation; // 90, 180, 270...
-    
+
     InputImageRotation rotation;
     if (Platform.isIOS) {
-      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ??
+      rotation =
+          InputImageRotationValue.fromRawValue(sensorOrientation) ??
           InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
       var rotationCompensation = (sensorOrientation + 360) % 360;
-      rotation = InputImageRotationValue.fromRawValue(rotationCompensation) ??
+      rotation =
+          InputImageRotationValue.fromRawValue(rotationCompensation) ??
           InputImageRotation.rotation0deg;
     } else {
       rotation = InputImageRotation.rotation0deg;
@@ -180,12 +190,12 @@ class CameraViewModel with ChangeNotifier {
     required Size imageSize,
     required Size widgetSize,
   }) {
-    // (이 스케일링 로직은 CameraPreview가 'cover' 모드일 때를 가정한 것이며,
+    // (이 스케일링 로직은 CameraPreview가 '모cover' 드일 때를 가정한 것이며,
     // 'contain' (AspectRatio) 모드에서는 더 복잡한 계산이 필요합니다.)
-    
+
     final double scaleX = widgetSize.width / imageSize.width;
     final double scaleY = widgetSize.height / imageSize.height;
-    
+
     // TODO: AspectRatio에 맞춘 정확한 스케일링 필요
     // (우선은 단순 비율로 계산)
     return Rect.fromLTRB(
@@ -194,5 +204,25 @@ class CameraViewModel with ChangeNotifier {
       rect.right * scaleX,
       rect.bottom * scaleY,
     );
+  }
+
+  // [신규] UI 토글 상태 변수
+  bool _isGridEnabled = true; // 그리드 (기본값: 켜기)
+  bool _isAiAssistEnabled = true; // AI 어시스트 (기본값: 켜기)
+  // AiMode _currentMode = AiMode.person; // (추후 풍경 모드 추가 시)
+
+  // [신규] UI가 구독할 Getter
+  bool get isGridEnabled => _isGridEnabled;
+  bool get isAiAssistEnabled => _isAiAssistEnabled;
+
+  // [신규] UI가 호출할 토글 함수
+  void toggleGrid() {
+    _isGridEnabled = !_isGridEnabled;
+    notifyListeners(); // UI 갱신 알림
+  }
+
+  void toggleAiAssist() {
+    _isAiAssistEnabled = !_isAiAssistEnabled;
+    notifyListeners(); // UI 갱신 알림
   }
 }

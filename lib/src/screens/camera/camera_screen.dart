@@ -20,9 +20,7 @@ class CameraScreen extends StatelessWidget {
     // ViewModel을 이 스크린 위젯 트리에 주입합니다.
     // ViewModel은 Context.read를 통해 main.dart에서 제공된 CameraService를 참조합니다.
     return ChangeNotifierProvider(
-      create: (context) => CameraViewModel(
-        context.read<CameraService>(),
-      ),
+      create: (context) => CameraViewModel(context.read<CameraService>()),
       child: const CameraView(),
     );
   }
@@ -72,10 +70,7 @@ class CameraView extends StatelessWidget {
         children: [
           CircularProgressIndicator(color: Colors.white),
           SizedBox(height: 16),
-          Text(
-            '카메라를 준비 중입니다...',
-            style: TextStyle(color: Colors.white),
-          ),
+          Text('카메라를 준비 중입니다...', style: TextStyle(color: Colors.white)),
         ],
       ),
     );
@@ -83,16 +78,25 @@ class CameraView extends StatelessWidget {
 
   /// 카메라 미리보기와 구도 가이드를 겹쳐서 보여주는 위젯
   Widget _buildCameraPreview(
-      BuildContext context, CameraController controller) {
-    
+    BuildContext context,
+    CameraController controller,
+  ) {
     // 1. ViewModel에서 ML Kit 결과 및 모든 상태 구독
-    final List<DetectedObject> detections =
-        context.watch<CameraViewModel>().detections;
+    final List<DetectedObject> detections = context
+        .watch<CameraViewModel>()
+        .detections;
     final Size? imageSize = context.watch<CameraViewModel>().imageSize;
-    final Offset? compositionTarget =
-        context.watch<CameraViewModel>().compositionTarget;
-    final bool isCompositionCorrect =
-        context.watch<CameraViewModel>().isCompositionCorrect;
+    final Offset? compositionTarget = context
+        .watch<CameraViewModel>()
+        .compositionTarget;
+    final bool isCompositionCorrect = context
+        .watch<CameraViewModel>()
+        .isCompositionCorrect;
+    // 그리드가 활성화되었는지 여부
+    final bool isGridEnabled = context.watch<CameraViewModel>().isGridEnabled;
+    final bool isAiAssistEnabled = context
+        .watch<CameraViewModel>()
+        .isAiAssistEnabled;
 
     // 2. 카메라 프리뷰의 실제 종횡비(AspectRatio) 계산
     final cameraValue = controller.value;
@@ -113,8 +117,10 @@ class CameraView extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             // 현재 UI 위젯의 크기
-            final widgetSize =
-                Size(constraints.maxWidth, constraints.maxHeight);
+            final widgetSize = Size(
+              constraints.maxWidth,
+              constraints.maxHeight,
+            );
 
             // ViewModel에 현재 UI 크기를 알려줌 (좌표 계산용)
             context.read<CameraViewModel>().setScreenSize(widgetSize);
@@ -123,10 +129,12 @@ class CameraView extends StatelessWidget {
             return CustomPaint(
               painter: CompositionOverlayPainter(
                 detections: detections,
-                imageSize: imageSize,       // 카메라 이미지 원본 크기
-                widgetSize: widgetSize,     // 현재 UI 위젯 크기
+                imageSize: imageSize, // 카메라 이미지 원본 크기
+                widgetSize: widgetSize, // 현재 UI 위젯 크기
                 compositionTarget: compositionTarget,
                 isCompositionCorrect: isCompositionCorrect,
+                isGridEnabled: isGridEnabled, // [신규]
+                isAiAssistEnabled: isAiAssistEnabled, // [신규]
               ),
             );
           },
@@ -141,6 +149,42 @@ class CameraView extends StatelessWidget {
             onPressed: () {
               // TODO: (다음 단계) README의 'settings_screen.dart'로 이동
               // 예: Navigator.push(context, MaterialPageRoute(...));
+            },
+          ),
+        ),
+
+        // 레이어 3: UI 버튼들
+        Positioned(
+          top: 50,
+          left: 20,
+          // [신규] 그리드 토글 버튼
+          child: IconButton(
+            icon: Icon(
+              isGridEnabled ? Icons.grid_on : Icons.grid_off, // 상태에 따라 아이콘 변경
+              color: Colors.white,
+              size: 30,
+            ),
+            onPressed: () {
+              // ViewModel의 토글 함수 호출
+              context.read<CameraViewModel>().toggleGrid();
+            },
+          ),
+        ),
+        Positioned(
+          top: 50,
+          left: 80, // (위치 예시)
+          // [신규] AI 어시스트 토글 버튼
+          child: IconButton(
+            icon: Icon(
+              isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
+              color: isAiAssistEnabled
+                  ? Colors.yellowAccent
+                  : Colors.white, // AI 기능은 노란색으로 강조
+              size: 30,
+            ),
+            onPressed: () {
+              // ViewModel의 토글 함수 호출
+              context.read<CameraViewModel>().toggleAiAssist();
             },
           ),
         ),

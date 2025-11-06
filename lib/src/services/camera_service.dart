@@ -10,7 +10,6 @@ class CameraService with ChangeNotifier {
   CameraController? _controller;
   CameraController? get controller => _controller;
 
-  // 이거는 이해 안 감
   CameraImage? _cameraImage;
   CameraImage? get cameraImage => _cameraImage;
 

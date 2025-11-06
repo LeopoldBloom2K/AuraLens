@@ -1,18 +1,12 @@
-# Podfile
+# ios/Podfile (수정된 전체 내용)
 
-# Flutter에서 사용하는 기본 플랫폼 버전입니다.
-# (사용자의 AppFrameworkInfo.plist와 project.pbxproj를 기반으로 13.0으로 설정합니다.)
 platform :ios, '13.0'
 
-# CocoaPods가 Flutter 프로젝트의 플러그인을 찾을 수 있도록 하는 환경 변수입니다.
-ENV['FLUTTER_ROOT'] = File.join(File.dirname(__FILE__), '..', 'flutter')
-
 # Flutter에서 필요한 기본 Pods를 로드합니다.
-require File.join(ENV['FLUTTER_ROOT'], 'packages', 'flutter_tools', 'bin', 'podhelper')
+require File.join(File.dirname(__FILE__), '..', 'flutter', 'packages', 'flutter_tools', 'bin', 'podhelper')
 
 target 'Runner' do
-  # [이 줄을 추가하세요]
-  # Google ML Kit 객체 탐지 네이티브 라이브러리를 추가합니다.
+  # [핵심] Google ML Kit 객체 탐지 네이티브 라이브러리
   pod 'GoogleMLKit/ObjectDetection', '3.2.0'
 
   use_frameworks!
