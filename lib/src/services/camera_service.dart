@@ -40,6 +40,14 @@ class CameraService with ChangeNotifier {
 
       await _controller!.initialize();
       _isCameraInitialized = true;
+
+      // 물리적 회전 방향 감지
+      _controller.enableOrientationListener();
+      
+      // 컨트롤러 값 변경시마다 UI에 알림
+      _controller.addListener(notifyListeners);
+
+
     } catch (e) {
       log('카메라 초기화 실패: $e');
       _isCameraInitialized = false;
@@ -91,6 +99,8 @@ class CameraService with ChangeNotifier {
   /// 서비스 종료 시 리소스 해제
   @override
   void dispose() {
+    _controller.removeListener(notifyListeners);
+    _controller.disableOrientationListner();
     stopImageStream();
     _controller?.dispose();
     _isCameraInitialized = false;

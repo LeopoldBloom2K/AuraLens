@@ -2,6 +2,7 @@
 
 import 'dart:developer';
 import 'dart:io'; // Platform 확인
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // SystemChrome
 import 'package:camera/camera.dart';
@@ -17,6 +18,10 @@ class CameraViewModel with ChangeNotifier {
   // ML Kit ObjectDetector 인스턴스
   late final ObjectDetector _objectDetector;
 
+  // 최근 저장된 사진 썸네일 상태 변수 
+  XFile? _recentPhoto;
+
+
   bool _isDetecting = false;
   List<DetectedObject> _detections = []; // ML Kit의 모델을 직접 사용
   Offset? _compositionTarget;
@@ -30,6 +35,7 @@ class CameraViewModel with ChangeNotifier {
   Offset? get compositionTarget => _compositionTarget;
   bool get isCompositionCorrect => _isCompositionCorrect;
   Size? get imageSize => _imageSize; // Painter의 좌표 스케일링에 필요
+  XFile? get recentPhoto => _recentPhoto; // 썸네일
 
   CameraViewModel(this._cameraService) {
     _cameraService.addListener(notifyListeners);
@@ -130,7 +136,11 @@ class CameraViewModel with ChangeNotifier {
   /// 사진 촬영
   Future<void> takePicture() async {
     final XFile? photo = await _cameraService.takePicture();
-    if (photo != null) {
+    if (photo != null) return;
+    // 촬영한 사진 상태 변수에 저장 후 UI에 알림
+    _recentPhoto = photo;
+    notifyListeners();    // UI (썸네일) 갱신
+  
       try {
         await GallerySaver.saveImage(photo.path);
         log('사진 저장 성공: ${photo.path}');
@@ -138,7 +148,6 @@ class CameraViewModel with ChangeNotifier {
       } catch (e) {
         log('사진 저장 실패: $e');
       }
-    }
   }
 
   @override
@@ -146,7 +155,7 @@ class CameraViewModel with ChangeNotifier {
     log('CameraViewModel 해제');
     _cameraService.stopImageStream();
     _cameraService.removeListener(notifyListeners);
-    _objectDetector.close(); // ML Kit 리소스 해제
+    _objectDetector.close(); // ML Kit 리소스 해제}
     super.dispose();
   }
 

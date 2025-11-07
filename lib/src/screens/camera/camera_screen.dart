@@ -4,11 +4,14 @@
 
 import 'package:camera/camera.dart'; //
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:provider/provider.dart'; //
 import 'package:auralens/src/screens/camera/camera_view_model.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
+import 'dart:io'; // 이미지 파일 (썸네일) 사용하기 위한 import 
+
 
 /// README의 메인 카메라 UI 스크린
 /// ViewModel을 주입하는 역할을 합니다.
@@ -46,20 +49,26 @@ class CameraView extends StatelessWidget {
           }
 
           // 2. 카메라 미리보기 및 오버레이 빌드
-          final cameraController = cameraService.controller!;
-          return _buildCameraPreview(context, cameraController);
+          return _buildCameraPreview(context, cameraService.controller!);
         },
       ),
-      // 3. 사진 촬영 버튼
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // ViewModel의 촬영 함수 호출
-          context.read<CameraViewModel>().takePicture();
-        },
-        child: const Icon(Icons.camera_alt),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
+  }
+
+// 기기 방향에 따라 아이콘 한번에 정렬
+  int _getRotationTurns(DeviceOrientation orientation) {
+    switch (orientation) {
+      case DeviceOrientation.portraitUp:
+      return 0; // 0도
+      case DeviceOrientation.landscapeLeft:
+      return 1; // 90도(시계)
+      case DeviceOrientation.portraitDown:
+      return 2; // 180도
+      case DeviceOrientation.landscapeRight:
+      return 3; // 270도(반시계)
+      default:
+        return 0;
+    }
   }
 
   /// 로딩 인디케이터
@@ -70,7 +79,8 @@ class CameraView extends StatelessWidget {
         children: [
           CircularProgressIndicator(color: Colors.white),
           SizedBox(height: 16),
-          Text('카메라를 준비 중입니다...', style: TextStyle(color: Colors.white)),
+          Text('카메라를 준비 중입니다...', 
+          style: TextStyle(color: Colors.white)),
         ],
       ),
     );
@@ -82,33 +92,26 @@ class CameraView extends StatelessWidget {
     CameraController controller,
   ) {
     // 1. ViewModel에서 ML Kit 결과 및 모든 상태 구독
-    final List<DetectedObject> detections = context
-        .watch<CameraViewModel>()
-        .detections;
-    final Size? imageSize = context.watch<CameraViewModel>().imageSize;
-    final Offset? compositionTarget = context
-        .watch<CameraViewModel>()
-        .compositionTarget;
-    final bool isCompositionCorrect = context
-        .watch<CameraViewModel>()
-        .isCompositionCorrect;
-    // 그리드가 활성화되었는지 여부
-    final bool isGridEnabled = context.watch<CameraViewModel>().isGridEnabled;
-    final bool isAiAssistEnabled = context
-        .watch<CameraViewModel>()
-        .isAiAssistEnabled;
+    final viewModel = context
+        .read<CameraViewModel>();   // 방향 확인만을 위해 read
+
+    // 컨트롤러에서 직접 방향을 가져옴
+    final CameraValue cameraValue = controller.value;
+    final DeviceOrientation orientation = cameraValue.deviceOrientation;
+    final int turns = _getRotationTurns(orientation); 
+    final bool isLandscape = (
+      orientation == DeviceOrientation.landscapeLeft ||
+      orientation == DeviceOrientation.landscapeRight
+      );
 
     // 2. 카메라 프리뷰의 실제 종횡비(AspectRatio) 계산
-    final cameraValue = controller.value;
-    final cameraAspectRatio = cameraValue.aspectRatio;
-
     return Stack(
       fit: StackFit.expand, // Stack을 화면에 꽉 채움
       children: [
         // 레이어 1: 카메라 미리보기 (종횡비 유지)
         Center(
           child: AspectRatio(
-            aspectRatio: cameraAspectRatio,
+            aspectRatio: cameraValue.aspectRatio,
             child: CameraPreview(controller),
           ),
         ),
@@ -121,74 +124,168 @@ class CameraView extends StatelessWidget {
               constraints.maxWidth,
               constraints.maxHeight,
             );
+            viewModel.setScreenSize(widgetSize);
 
-            // ViewModel에 현재 UI 크기를 알려줌 (좌표 계산용)
-            context.read<CameraViewModel>().setScreenSize(widgetSize);
-
+        return Consumer<CameraViewModel>(
+          builder: (context, vm, child) {
+            final widgetSize = Size(constraints.maxWidth, constraints.maxHeight);
+            vm.setScreenSize(widgetSize);
+            
             // 3. CustomPaint에 모든 상태 전달
             return CustomPaint(
               painter: CompositionOverlayPainter(
-                detections: detections,
-                imageSize: imageSize, // 카메라 이미지 원본 크기
+                detections: vm.detections,
+                imageSize: vm.imageSize, // 카메라 이미지 원본 크기
                 widgetSize: widgetSize, // 현재 UI 위젯 크기
-                compositionTarget: compositionTarget,
-                isCompositionCorrect: isCompositionCorrect,
-                isGridEnabled: isGridEnabled, // [신규]
-                isAiAssistEnabled: isAiAssistEnabled, // [신규]
+                compositionTarget: vm.compositionTarget,
+                isCompositionCorrect: vm.isCompositionCorrect,
+                isGridEnabled: vm.isGridEnabled,
+                isAiAssistEnabled: vm.isAiAssistEnabled
               ),
             );
           },
+        );
+          },  
         ),
-
-        // 레이어 3: 설정 버튼 등 기타 UI
+// 제어 버튼들 회전, 재배치 설정
+        // 상단 버튼
+        // 상단 버튼 바 (세로: 상단 Row, 가로: 좌측 Column)
         Positioned(
-          top: 50,
-          right: 20,
-          child: IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white, size: 30),
-            onPressed: () {
-              // TODO: (다음 단계) README의 'settings_screen.dart'로 이동
-              // 예: Navigator.push(context, MaterialPageRoute(...));
-            },
-          ),
-        ),
-
-        // 레이어 3: UI 버튼들
-        Positioned(
-          top: 50,
-          left: 20,
-          // [신규] 그리드 토글 버튼
-          child: IconButton(
-            icon: Icon(
-              isGridEnabled ? Icons.grid_on : Icons.grid_off, // 상태에 따라 아이콘 변경
-              color: Colors.white,
-              size: 30,
+          top: isLandscape ? 0 : 50,
+          left: isLandscape ? 20 : 0,
+          right: isLandscape ? null : 0,
+          bottom: isLandscape ? 0 : null,
+          child: SafeArea(
+            child: Flex(
+              direction: isLandscape ? Axis.vertical : Axis.horizontal,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildRotatedButton( // 그리드
+                  context,
+                  turns: turns,
+                  icon: Icons.grid_on, // TODO: isGridEnabled 상태에 따라 변경
+                  onPressed: () {}, // TODO: viewModel.toggleGrid()
+                ),
+                _buildRotatedButton( // AI 어시스트
+                  context,
+                  turns: turns,
+                  icon: Icons.insights, // TODO: isAiEnabled 상태에 따라 변경
+                  onPressed: () {}, // TODO: viewModel.toggleAiAssist()
+                ),
+                _buildRotatedButton( // 설정
+                  context,
+                  turns: turns,
+                  icon: Icons.settings,
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const SettingsScreen()),
+                    );
+                  },
+                ),
+              ],
             ),
-            onPressed: () {
-              // ViewModel의 토글 함수 호출
-              context.read<CameraViewModel>().toggleGrid();
-            },
           ),
         ),
+        
+        // 하단 버튼 바 (세로: 하단 Row, 가로: 우측 Column)
         Positioned(
-          top: 50,
-          left: 80, // (위치 예시)
-          // [신규] AI 어시스트 토글 버튼
-          child: IconButton(
-            icon: Icon(
-              isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
-              color: isAiAssistEnabled
-                  ? Colors.yellowAccent
-                  : Colors.white, // AI 기능은 노란색으로 강조
-              size: 30,
-            ),
-            onPressed: () {
-              // ViewModel의 토글 함수 호출
-              context.read<CameraViewModel>().toggleAiAssist();
-            },
-          ),
-        ),
+          bottom: isLandscape ? 0 : 20,
+          right: isLandscape ? 20 : 0,
+          left: isLandscape ? null : 0,
+          child: SafeArea(
+            child: Flex(
+              direction: isLandscape ? Axis.vertical : Axis.horizontal,
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // 최근 갤러리 썸네일
+                _buildThumbnail(context, turns), // 회전값(turns) 전달
+                
+                // 셔터 버튼 (회전 필요 없음)
+                GestureDetector(
+                  onTap: () => viewModel.takePicture(),
+                  child: Container(
+                    margin: isLandscape 
+                        ? const EdgeInsets.symmetric(vertical: 20)
+                        : const EdgeInsets.symmetric(horizontal: 20),
+                    width: 70,
+                    height: 70,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                      border: Border.all(color: Colors.grey, width: 4),
+                    ),
+                  ),
+                ),
+                
+                // 카메라 전환 버튼 (예시)
+                _buildRotatedButton(
+                  context,
+                  turns: turns,
+                  icon: Icons.flip_camera_ios,
+                  onPressed: () {
+                    // TODO: 카메라 전환 로직
+                  },
+                ),
       ],
+            ),
+          ),
+    )
+      ]
     );
   }
 }
+
+// 모든 아이콘 한번에 회전시키는 위젯 생성
+Widget _buildRotatedButton(
+  BuildContext context, {
+    required int turns,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      icon: RotatedBox(
+      quarterTurns: turns,
+      child: Icon(icon, color: Colors.white, size: 30),
+      ),
+      onPressed: onPressed,
+    );
+  }
+
+  // 썸네일 위젯 
+  Widget _buildThumbnail(BuildContext context, int turns) {  
+    final recentPhoto = context.watch<CameraViewModel>().recentPhoto;
+
+    Widget content;
+    if (recentPhoto == null) {
+      content = const Icon(Icons.photo_library_outlined, color: Colors.white);
+    } else {
+      content = ClipOval(
+        child: Image.file(
+          File(recentPhoto.path),
+          width: 50,
+          height: 50,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: () {
+        //TODO: 갤러리 화면 이동 로직 구현 
+      },
+      child: RotatedBox(
+        quarterTurns: turns,
+        child: Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 1),
+          ),
+          child: content,
+        ),
+      ),
+    );
+  }
