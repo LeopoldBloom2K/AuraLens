@@ -1,0 +1,52 @@
+# Flutter 및 Dart 관련 파일
+build/
+.dart_tool/
+.packages
+.metadata
+
+# IDE 및 편집기 설정
+.idea/
+*.iml
+*.iws
+.vscode/*
+
+# 빌드 및 생성 파일
+app.apk
+app.aab
+app.ipa
+symlinked-plugins/
+
+# iOS 빌드 아티팩트
+ios/Pods/
+ios/Flutter/ephemeral/
+ios/.symlinks/
+ios/Runner.xcworkspace/
+ios/Runner.xcodeproj/project.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/Flutter.podspec
+ios/Podfile.lock
+
+# Android 빌드 아티팩트
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/flutter_assets/
+*.keystore
+*.jks
+
+# 운영체제 생성 파일
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+
+# Windows, macOS, Linux 플랫폼 폴더 전체를 무시합니다. (Android/iOS에만 집중)
+/windows/
+/macos/
+/linux/
+# (web/ 폴더는 크롬 테스트를 위해 제외)
