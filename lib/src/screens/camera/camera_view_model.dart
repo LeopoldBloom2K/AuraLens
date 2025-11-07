@@ -10,6 +10,7 @@ import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart
 import 'package:gallery_saver/gallery_saver.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/services/composition_service.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
@@ -31,9 +32,13 @@ class CameraViewModel with ChangeNotifier {
 
   // UI가 구독할 Getter
   List<DetectedObject> get detections => _detections;
+
   CameraService get cameraService => _cameraService;
+
   Offset? get compositionTarget => _compositionTarget;
+
   bool get isCompositionCorrect => _isCompositionCorrect;
+
   Size? get imageSize => _imageSize; // Painter의 좌표 스케일링에 필요
   XFile? get recentPhoto => _recentPhoto; // 썸네일
 
@@ -69,34 +74,40 @@ class CameraViewModel with ChangeNotifier {
       try {
         // ML Kit가 요구하는 InputImage로 변환
         final InputImage? inputImage = _inputImageFromCameraImage(cameraImage);
-        if (inputImage == null) return;
+        if (inputImage == null) {
+          _isDetecting = false;
+          return;
+        }
 
-        // 이미지 크기 저장 (Painter의 스케일링 계산용)
-        _imageSize = inputImage.metadata?.size;
+          // 이미지 크기 저장 (Painter의 스케일링 계산용)
+          _imageSize = inputImage.metadata?.size;
 
-        // 3. ML Kit로 이미지 처리
-        final List<DetectedObject> results = await _objectDetector.processImage(
-          inputImage,
-        );
+          // 3. ML Kit로 이미지 처리
+          final List<DetectedObject> results = await _objectDetector.processImage(
+            inputImage,
+          );
 
-        // 4. 'person' 레이블 필터링
-        final List<DetectedObject> personDetections = results
-            .where(
-              (obj) => obj.labels.any(
-                (label) => label.text.toLowerCase() == 'person',
-              ),
-            )
-            .toList();
+          // 4. 'person' 레이블 필터링
+          final List<DetectedObject> personDetections = results
+              .where(
+                (obj) =>
+                obj.labels.any(
+                      (label) => label.text.toLowerCase() == 'person',
+                ),
+          )
+              .toList();
 
-        // 5. 구도 계산
-        _updateComposition(personDetections);
+          // 5. 구도 계산
+          _updateComposition(personDetections);
 
-        // 6. 상태 업데이트
-        _detections = personDetections;
-      } catch (e) {
+          // 6. 상태 업데이트
+          _detections = personDetections;
+        } catch (e) {
         log('ML Kit 추론 실패: $e');
       } finally {
-        notifyListeners();
+        if (this.hasListeners) {
+          notifyListeners();
+        }
         _isDetecting = false;
       }
     });
@@ -136,27 +147,18 @@ class CameraViewModel with ChangeNotifier {
   /// 사진 촬영
   Future<void> takePicture() async {
     final XFile? photo = await _cameraService.takePicture();
-    if (photo != null) return;
+    if (photo == null) return;
     // 촬영한 사진 상태 변수에 저장 후 UI에 알림
     _recentPhoto = photo;
-    notifyListeners();    // UI (썸네일) 갱신
-  
-      try {
-        await GallerySaver.saveImage(photo.path);
-        log('사진 저장 성공: ${photo.path}');
-        // TODO: 사용자에게 "저장 완료" 피드백 (Snackbar 등)
-      } catch (e) {
-        log('사진 저장 실패: $e');
-      }
-  }
+    notifyListeners(); // UI (썸네일) 갱신
 
-  @override
-  void dispose() {
-    log('CameraViewModel 해제');
-    _cameraService.stopImageStream();
-    _cameraService.removeListener(notifyListeners);
-    _objectDetector.close(); // ML Kit 리소스 해제}
-    super.dispose();
+    try {
+      await GallerySaver.saveImage(photo.path);
+      log('사진 저장 성공: ${photo.path}');
+      // TODO: 사용자에게 "저장 완료" 피드백 (Snackbar 등)
+    } catch (e) {
+      log('사진 저장 실패: $e');
+    }
   }
 
   /// CameraImage를 ML Kit InputImage로 변환 (좌표 변환의 핵심)
@@ -164,17 +166,25 @@ class CameraViewModel with ChangeNotifier {
   InputImage? _inputImageFromCameraImage(CameraImage image) {
     final camera = _cameraService.controller!.description;
     final sensorOrientation = camera.sensorOrientation; // 90, 180, 270...
+    final writeBuffer = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      writeBuffer.putUint8List(plane.bytes);
+    }
+    final bytes = writeBuffer
+        .done()
+        .buffer
+        .asUint8List();
 
     InputImageRotation rotation;
     if (Platform.isIOS) {
       rotation =
           InputImageRotationValue.fromRawValue(sensorOrientation) ??
-          InputImageRotation.rotation0deg;
+              InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
       var rotationCompensation = (sensorOrientation + 360) % 360;
       rotation =
           InputImageRotationValue.fromRawValue(rotationCompensation) ??
-          InputImageRotation.rotation0deg;
+              InputImageRotation.rotation0deg;
     } else {
       rotation = InputImageRotation.rotation0deg;
     }
@@ -222,6 +232,7 @@ class CameraViewModel with ChangeNotifier {
 
   // [신규] UI가 구독할 Getter
   bool get isGridEnabled => _isGridEnabled;
+
   bool get isAiAssistEnabled => _isAiAssistEnabled;
 
   // [신규] UI가 호출할 토글 함수
@@ -233,5 +244,14 @@ class CameraViewModel with ChangeNotifier {
   void toggleAiAssist() {
     _isAiAssistEnabled = !_isAiAssistEnabled;
     notifyListeners(); // UI 갱신 알림
+  }
+
+  @override
+  void dispose() {
+    log('CameraViewModel 해제');
+    _cameraService.stopImageStream();
+    _cameraService.removeListener(notifyListeners);
+    _objectDetector.close(); // ML Kit 리소스 해제
+    super.dispose();
   }
 }

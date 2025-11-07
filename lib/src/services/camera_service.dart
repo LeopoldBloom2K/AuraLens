@@ -50,6 +50,7 @@ class CameraService with ChangeNotifier {
 
     } catch (e) {
       log('카메라 초기화 실패: $e');
+      _controller = null;
       _isCameraInitialized = false;
     }
     notifyListeners();
@@ -60,12 +61,11 @@ class CameraService with ChangeNotifier {
     if (_controller == null || !_isCameraInitialized || _isStreaming) return;
 
     _controller!.startImageStream((image) {
-      if (!_isStreaming) { 
-        // 스트림이 중지된 후에도 프레임이 들어오는 것을 방지
-        return;
+      if (_isStreaming) {
+        _cameraImage = image;
+        onFrame(image); // TFLite 추론을 위해 콜백 실행
       }
-      _cameraImage = image;
-      onFrame(image); // TFLite 추론을 위해 콜백 실행
+
     });
     _isStreaming = true;
     log('카메라 스트림 시작');
@@ -99,10 +99,11 @@ class CameraService with ChangeNotifier {
   /// 서비스 종료 시 리소스 해제
   @override
   void dispose() {
-    _controller.removeListener(notifyListeners);
-    _controller.disableOrientationListner();
     stopImageStream();
+    _controller.removeListener(notifyListeners);
+    _controller.disableOrientationListener();
     _controller?.dispose();
+    _controller = null;
     _isCameraInitialized = false;
     log('CameraService 해제');
     super.dispose();
