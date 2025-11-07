@@ -35,25 +35,24 @@ class CameraService with ChangeNotifier {
         camera, // 후면 카메라
         ResolutionPreset.high, // 고해상도 (모델 성능에 따라 조절)
         enableAudio: false,     // 오디오 비활성화
-        imageFormatGroup: ImageFormatGroup.bgra8888, // iOS/Android 호환 형식 (또는 yuv420)
+        imageFormatGroup: ImageFormatGroup.yuv420, // iOS/Android 호환 형식
       );
 
       await _controller!.initialize();
       _isCameraInitialized = true;
-
       // 물리적 회전 방향 감지
       _controller.enableOrientationListener();
-      
       // 컨트롤러 값 변경시마다 UI에 알림
       _controller.addListener(notifyListeners);
 
+      notifyListeners(); // 성공시에만 호출함
 
     } catch (e) {
       log('카메라 초기화 실패: $e');
       _controller = null;
       _isCameraInitialized = false;
+      notifyListeners();    // 실패시의 호출
     }
-    notifyListeners();
   }
 
   /// 카메라 이미지 스트림을 시작합니다.
@@ -100,8 +99,8 @@ class CameraService with ChangeNotifier {
   @override
   void dispose() {
     stopImageStream();
-    _controller.removeListener(notifyListeners);
-    _controller.disableOrientationListener();
+    _controller?.removeListener(notifyListeners);
+    _controller?.disableOrientationListener();
     _controller?.dispose();
     _controller = null;
     _isCameraInitialized = false;
