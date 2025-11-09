@@ -2,8 +2,8 @@
 // lib/src/services/composition_service.dart
 
 import 'dart:ui';
-
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart'; // Offset, Rect, Size 사용
+import 'package:auralens/src/utils/coordinate_scaler.dart';
 
 // 삼각형을 이용해 구도를 계산하는 로직
 class TriangularComposition {
@@ -103,21 +103,21 @@ class CompositionService {
       Offset? p1, p2, p3;
 
       if (detections.isNotEmpty) {
-      // 가장 큰 객체의 중심점
-      p1 = scaleRect(
-        rect: detections[0].boundingBox,
-        imageSize: imageSize,
-        widgetSize: widgetSize,
-      ).center;
+        // 가장 큰 객체의 중심점
+        p1 = scaleRect(
+          rect: detections[0].boundingBox,
+          imageSize: imageSize,
+          widgetSize: widgetSize,
+        ).center;
       }
 
       if (detections.length >= 2) {
-      // 두 번째로 큰 객체의 중심점
-      p2 = scaleRect(
-        rect: detections[1].boundingBox,
-        imageSize: imageSize,
-        widgetSize: widgetSize,
-      ).center;
+        // 두 번째로 큰 객체의 중심점
+        p2 = scaleRect(
+          rect: detections[1].boundingBox,
+          imageSize: imageSize,
+          widgetSize: widgetSize,
+        ).center;
       }
 
       // 세 번째 지점: (임시) 화면 상단 중앙

@@ -11,6 +11,8 @@ import 'package:gallery_saver/gallery_saver.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/services/composition_service.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'package:auralens/src/models/camera_settings.dart';
+import 'package:auralens/src/utils/coordinate_scaler.dart';
 
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
@@ -80,11 +82,14 @@ class CameraViewModel with ChangeNotifier {
   return results;
 }
 
-  void _startModelInference() {
+  void _startModelInference() async {
     log('CameraViewModel: ML Kit 추론 루프 시작');
     _cameraService.startImageStream((CameraImage cameraImage) async {
-      if (_isDetecting || _screenSize == Size.zero) return;
-
+      if (_cameraService.controller == null || !_cameraService.controller!.value.isInitialized) {
+        log('카메라 컨트롤러가 초기화되지 않았습니다. 모델 추론을 시작할 수 없습니다.');
+        return;
+      }
+      
       _isDetecting = true;
       try {
         // ML Kit가 요구하는 InputImage로 변환
@@ -138,7 +143,7 @@ class CameraViewModel with ChangeNotifier {
       // (이 부분은 Painter에서 처리하는 것이 더 정확함)
 
       // ViewModel은 UI 좌표계로 변환하여 CompositionService에 전달
-      final Rect scaledBox = _scaleRect(
+      final Rect scaledBox = scaleRect(
         rect: imageBox,
         imageSize: _imageSize!,
         widgetSize: _screenSize,
@@ -219,7 +224,7 @@ class CameraViewModel with ChangeNotifier {
   }
 
   /// ML Kit 좌표(이미지 기준)를 UI 좌표(위젯 기준)로 스케일링
-  Rect _scaleRect({
+  Rect scaleRect({
     required Rect rect,
     required Size imageSize,
     required Size widgetSize,
@@ -244,29 +249,47 @@ class CameraViewModel with ChangeNotifier {
   bool _isGridEnabled = true; // 그리드 (기본값: 켜기)
   bool _isAiAssistEnabled = true; // AI 어시스트 (기본값: 켜기)
   // AiMode _currentMode = AiMode.person; // (추후 풍경 모드 추가 시)
+  CameraResolution _cameraResolution = CameraResolution.medium; // 기본값
 
   // [신규] UI가 구독할 Getter
   bool get isGridEnabled => _isGridEnabled;
-
   bool get isAiAssistEnabled => _isAiAssistEnabled;
+  CameraResolution get cameraResolution => _cameraResolution;
 
   // [신규] UI가 호출할 토글 함수
-  void toggleGrid() {
-    _isGridEnabled = !_isGridEnabled;
-    notifyListeners(); // UI 갱신 알림
+  void toggleGrid(bool value) {
+    _isGridEnabled = value;
+    notifyListeners();
+    // TODO: 만약 그리드 활성화/비활성화 시 CameraService에 알려야 한다면 여기서 호출
   }
 
-  void toggleAiAssist() {
-    _isAiAssistEnabled = !_isAiAssistEnabled;
+  void toggleAiAssist(bool value) {
+    _isAiAssistEnabled = value;
     notifyListeners(); // UI 갱신 알림
+    // TODO: AI 어시스트 활성화/비활성화 시 추론 루프를 시작/정지해야 한다면 여기서 호출
+    // 현재는 _startModelInference()가 isAiAssistEnabled를 사용하고 있으므로,
+    // 이 값을 변경하면 자연스럽게 동작합니다.
   }
 
   @override
   void dispose() {
     log('CameraViewModel 해제');
     _cameraService.stopImageStream();
-    _cameraService.removeListener(notifyListeners);
+    _cameraService.controller?.removeListener(notifyListeners);
     _objectDetector.close(); // ML Kit 리소스 해제
     super.dispose();
+  }
+
+  Future<void> setCameraResolution(CameraResolution resolution) async {
+    if (_cameraResolution == resolution) return;
+    _cameraResolution = resolution;
+    notifyListeners();
+
+    // TODO: 카메라 해상도 변경 로직 (매우 중요!)
+    // 카메라 컨트롤러를 dispose 하고 새로운 해상도로 다시 initialize 해야 합니다.
+    // 이는 카메라 미리보기 스트림에 영향을 미치므로, 사용자에게 잠시 카메라가 멈출 수 있음을 알리거나
+    // 전환 중 로딩 스피너를 보여주는 것이 좋습니다.
+    // 예: await _cameraService.updateCameraResolution(resolution);
+    log('카메라 해상도 변경: ${resolution.name}');
   }
 }

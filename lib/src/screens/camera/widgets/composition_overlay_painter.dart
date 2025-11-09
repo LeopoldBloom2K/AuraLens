@@ -4,6 +4,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:auralens/src/utils/coordinate_scaler.dart';
 
 class CompositionOverlayPainter extends CustomPainter {
   final List<DetectedObject> detections;
@@ -72,7 +73,7 @@ class CompositionOverlayPainter extends CustomPainter {
 
       for (final detection in detections) {
         // ML Kit 좌표(이미지 기준) -> UI 좌표(위젯 기준)로 스케일링
-        final Rect absoluteBox = _scaleRect(
+        final Rect absoluteBox = scaleRect(
           rect: detection.boundingBox,
           imageSize: imageSize!,
           widgetSize: widgetSize,
@@ -122,7 +123,7 @@ class CompositionOverlayPainter extends CustomPainter {
   }
 
   /// ML Kit 좌표계(이미지)를 Flutter UI 좌표계(위젯)로 변환 (중요)
-  Rect _scaleRect({
+  Rect scaleRect({
     required Rect rect,
     required Size imageSize,
     required Size widgetSize,

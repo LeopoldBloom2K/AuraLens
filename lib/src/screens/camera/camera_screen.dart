@@ -11,7 +11,7 @@ import 'package:auralens/src/screens/camera/camera_view_model.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
 import 'dart:io'; // 이미지 파일 (썸네일) 사용하기 위한 import 
-
+import 'package:auralens/src/screens/settings/settings_screen.dart';
 
 /// README의 메인 카메라 UI 스크린
 /// ViewModel을 주입하는 역할을 합니다.
@@ -22,10 +22,7 @@ class CameraScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     // ViewModel을 이 스크린 위젯 트리에 주입합니다.
     // ViewModel은 Context.read를 통해 main.dart에서 제공된 CameraService를 참조합니다.
-    return ChangeNotifierProvider(
-      create: (context) => CameraViewModel(context.read<CameraService>()),
-      child: const CameraView(),
-    );
+    return const CameraView(); 
   }
 }
 
@@ -92,17 +89,14 @@ class CameraView extends StatelessWidget {
     CameraController controller,
   ) {
     // 1. ViewModel에서 ML Kit 결과 및 모든 상태 구독
-    final viewModel = context
-        .read<CameraViewModel>();   // 방향 확인만을 위해 read
+    return Consumer<CameraViewModel>(
+      builder: (context, viewModel, child) {
 
     // 컨트롤러에서 직접 방향을 가져옴
     final CameraValue cameraValue = controller.value;
     final DeviceOrientation orientation = cameraValue.deviceOrientation;
     final int turns = _getRotationTurns(orientation); 
-    final bool isLandscape = (
-      orientation == DeviceOrientation.landscapeLeft ||
-      orientation == DeviceOrientation.landscapeRight
-      );
+    final bool isLandscape = (orientation == DeviceOrientation.landscapeLeft || orientation == DeviceOrientation.landscapeRight);
 
     // 2. 카메라 프리뷰의 실제 종횡비(AspectRatio) 계산
     return Stack(
@@ -125,27 +119,21 @@ class CameraView extends StatelessWidget {
               constraints.maxHeight,
             );
             viewModel.setScreenSize(widgetSize);
-
-        return Consumer<CameraViewModel>(
-          builder: (context, vm, child) {
-            final widgetSize = Size(constraints.maxWidth, constraints.maxHeight);
-            vm.setScreenSize(widgetSize);
             
             // 3. CustomPaint에 모든 상태 전달
             return CustomPaint(
               painter: CompositionOverlayPainter(
-                detections: vm.detections,
-                imageSize: vm.imageSize, // 카메라 이미지 원본 크기
+                detections: viewModel.detections,
+                imageSize: viewModel.imageSize, // 카메라 이미지 원본 크기
                 widgetSize: widgetSize, // 현재 UI 위젯 크기
-                compositionTarget: vm.compositionTarget,
-                isCompositionCorrect: vm.isCompositionCorrect,
-                isGridEnabled: vm.isGridEnabled,
-                isAiAssistEnabled: vm.isAiAssistEnabled
+                compositionTarget: viewModel.compositionTarget,
+                isCompositionCorrect: viewModel.isCompositionCorrect,
+                isGridEnabled: viewModel.isGridEnabled,
+                isAiAssistEnabled: viewModel.isAiAssistEnabled,
+                // triangularComposition: viewModel.triangularComposition
               ),
             );
           },
-        );
-          },  
         ),
 // 제어 버튼들 회전, 재배치 설정
         // 상단 버튼
@@ -163,14 +151,18 @@ class CameraView extends StatelessWidget {
                 _buildRotatedButton( // 그리드
                   context,
                   turns: turns,
-                  icon: vm.isGridEnabled ? Icons.grid_on : Icons.grid_off,  // 아이콘 변경
-                  onPressed: () => viewModel.toggleGrid(), // 연결
+                  icon: viewModel.isGridEnabled 
+                  ? Icons.grid_on 
+                  : Icons.grid_off,  // 아이콘 변경
+                  onPressed: () => viewModel.toggleGrid(!viewModel.isGridEnabled), // 연결
                 ),
                 _buildRotatedButton( // AI 어시스트
                   context,
                   turns: turns,
-                  icon: vm.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,    // 아이콘 변경
-                  onPressed: () => viewModel.toggleAiAssist(),  // 연결
+                  icon: viewModel.isAiAssistEnabled 
+                  ? Icons.insights 
+                  : Icons.insights_outlined,    // 아이콘 변경
+                  onPressed: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),  // 연결
                 ),
                 _buildRotatedButton( // 설정
                   context,
@@ -200,7 +192,7 @@ class CameraView extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 // 최근 갤러리 썸네일
-                _buildThumbnail(context, turns), // 회전값(turns) 전달
+                _buildThumbnail(context, turns, viewModel.recentPhoto), // 회전값(turns) 전달
                 
                 // 셔터 버튼 (회전 필요 없음)
                 GestureDetector(
@@ -234,8 +226,9 @@ class CameraView extends StatelessWidget {
     )
       ]
     );
-  }
-}
+  },
+    );
+}    
 
 // 모든 아이콘 한번에 회전시키는 위젯 생성
 Widget _buildRotatedButton(
@@ -254,9 +247,7 @@ Widget _buildRotatedButton(
   }
 
   // 썸네일 위젯 
-  Widget _buildThumbnail(BuildContext context, int turns) {  
-    final recentPhoto = context.watch<CameraViewModel>().recentPhoto;
-
+  Widget _buildThumbnail(BuildContext context, int turns, XFile? recentPhoto) {  
     Widget content;
     if (recentPhoto == null) {
       content = const Icon(Icons.photo_library_outlined, color: Colors.white);
@@ -289,3 +280,4 @@ Widget _buildRotatedButton(
       ),
     );
   }
+}
