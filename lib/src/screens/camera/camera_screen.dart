@@ -163,14 +163,14 @@ class CameraView extends StatelessWidget {
                 _buildRotatedButton( // 그리드
                   context,
                   turns: turns,
-                  icon: Icons.grid_on, // TODO: isGridEnabled 상태에 따라 변경
-                  onPressed: () {}, // TODO: viewModel.toggleGrid()
+                  icon: vm.isGridEnabled ? Icons.grid_on : Icons.grid_off,  // 아이콘 변경
+                  onPressed: () => viewModel.toggleGrid(), // 연결
                 ),
                 _buildRotatedButton( // AI 어시스트
                   context,
                   turns: turns,
-                  icon: Icons.insights, // TODO: isAiEnabled 상태에 따라 변경
-                  onPressed: () {}, // TODO: viewModel.toggleAiAssist()
+                  icon: vm.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,    // 아이콘 변경
+                  onPressed: () => viewModel.toggleAiAssist(),  // 연결
                 ),
                 _buildRotatedButton( // 설정
                   context,

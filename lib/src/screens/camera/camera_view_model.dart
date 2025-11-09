@@ -65,6 +65,21 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
+  Future<List<DetectedObject>> _runModelOnIsolate(InputImage inputImage) async {
+  // Isolate에서는 ViewModel의 _objectDetector에 접근할 수 없으므로,
+  // 여기서 새로 생성하거나, Isolate 생성 시 전달해야 합니다.
+  // (간단한 예시를 위해 매번 생성)
+  final options = ObjectDetectorOptions(
+    mode: DetectionMode.stream,
+    classifyObjects: true,
+    multipleObjects: true,
+  );
+  final detector = ObjectDetector(options: options);
+  final results = await detector.processImage(inputImage);
+  detector.close();
+  return results;
+}
+
   void _startModelInference() {
     log('CameraViewModel: ML Kit 추론 루프 시작');
     _cameraService.startImageStream((CameraImage cameraImage) async {
@@ -78,34 +93,34 @@ class CameraViewModel with ChangeNotifier {
           _isDetecting = false;
           return;
         }
-
+        final List<DetectedObject> results = await compute(_runModelOnIsolate, inputImage);
           // 이미지 크기 저장 (Painter의 스케일링 계산용)
           _imageSize = inputImage.metadata?.size;
 
-          // 3. ML Kit로 이미지 처리
-          final List<DetectedObject> results = await _objectDetector.processImage(
-            inputImage,
-          );
+          // // 4. 'person' 레이블 필터링
+          // final List<DetectedObject> personDetections = results
+          //     .where(
+          //       (obj) =>
+          //       obj.labels.any(
+          //             (label) => label.text.toLowerCase() == 'person',
+          //       ),
+          // )
+          //     .toList();
 
-          // 4. 'person' 레이블 필터링
-          final List<DetectedObject> personDetections = results
-              .where(
-                (obj) =>
-                obj.labels.any(
-                      (label) => label.text.toLowerCase() == 'person',
-                ),
-          )
-              .toList();
+          // 모든 감지된 객체를 저장함
+          _detections = results;
 
-          // 5. 구도 계산
-          _updateComposition(personDetections);
+          // TODO: 여기에서 '주요 객체' (예: 음식, 사람)를 선별하고,
+          // 이 객체들을 이용해 구도 분석을 수행하는 함수를 호출합니다.
+          // List<DetectedObject> mainObjects = _filterMainObjects(_detections);
+          // _updateComposition(mainObjects); // 이제 mainObjects를 기반으로 구도 업데이트
 
           // 6. 상태 업데이트
-          _detections = personDetections;
+          _updateComposition(_detections);
         } catch (e) {
         log('ML Kit 추론 실패: $e');
       } finally {
-        if (this.hasListeners) {
+        if (hasListeners) {
           notifyListeners();
         }
         _isDetecting = false;
@@ -172,7 +187,7 @@ class CameraViewModel with ChangeNotifier {
     }
     final bytes = writeBuffer
         .done()
-        .buffer
+        .buffer 
         .asUint8List();
 
     InputImageRotation rotation;

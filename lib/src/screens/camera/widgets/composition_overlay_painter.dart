@@ -30,70 +30,73 @@ class CompositionOverlayPainter extends CustomPainter {
     // size == widgetSize
 
     // --- 3분할 그리드 ---
-    final gridPaint = Paint()
-      ..color = Colors.white.withAlpha(182)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    // ... (3분할 선 그리기 로직 동일) ...
-    final double thirdOfWidth = size.width / 3;
-    final double thirdOfHeight = size.height / 3;
-    canvas.drawLine(
-      Offset(thirdOfWidth, 0),
-      Offset(thirdOfWidth, size.height),
-      gridPaint,
-    );
-    canvas.drawLine(
-      Offset(thirdOfWidth * 2, 0),
-      Offset(thirdOfWidth * 2, size.height),
-      gridPaint,
-    );
-    canvas.drawLine(
-      Offset(0, thirdOfHeight),
-      Offset(size.width, thirdOfHeight),
-      gridPaint,
-    );
-    canvas.drawLine(
-      Offset(0, thirdOfHeight * 2),
-      Offset(size.width, thirdOfHeight * 2),
-      gridPaint,
-    );
+    if (isGridEnabled) {
+      final gridPaint = Paint()
+        ..color = Colors.white.withAlpha(182)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      // ... (3분할 선 그리기 로직 동일) ...
+      final double thirdOfWidth = size.width / 3;
+      final double thirdOfHeight = size.height / 3;
+      canvas.drawLine(
+        Offset(thirdOfWidth, 0),
+        Offset(thirdOfWidth, size.height),
+        gridPaint,
+      );
+      canvas.drawLine(
+        Offset(thirdOfWidth * 2, 0),
+        Offset(thirdOfWidth * 2, size.height),
+        gridPaint,
+      );
+      canvas.drawLine(
+        Offset(0, thirdOfHeight),
+        Offset(size.width, thirdOfHeight),
+        gridPaint,
+      );
+      canvas.drawLine(
+        Offset(0, thirdOfHeight * 2),
+        Offset(size.width, thirdOfHeight * 2),
+        gridPaint,
+      );
+    }
 
     if (imageSize == null || detections.isEmpty) return;
 
     // --- 바운딩 박스 & 레이블 ---
-    final boxPaint = Paint()
-      ..color = Colors.yellowAccent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
-    final textStyle = TextStyle(color: Colors.yellowAccent, fontSize: 14);
+    if (isAiAssistEnabled) {
+      final boxPaint = Paint()
+        ..color = Colors.yellowAccent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0;
+      final textStyle = TextStyle(color: Colors.yellowAccent, fontSize: 14);
 
-    for (final detection in detections) {
-      // ML Kit 좌표(이미지 기준) -> UI 좌표(위젯 기준)로 스케일링
-      final Rect absoluteBox = _scaleRect(
-        rect: detection.boundingBox,
-        imageSize: imageSize!,
-        widgetSize: widgetSize,
-      );
+      for (final detection in detections) {
+        // ML Kit 좌표(이미지 기준) -> UI 좌표(위젯 기준)로 스케일링
+        final Rect absoluteBox = _scaleRect(
+          rect: detection.boundingBox,
+          imageSize: imageSize!,
+          widgetSize: widgetSize,
+        );
 
-      canvas.drawRect(absoluteBox, boxPaint);
+        canvas.drawRect(absoluteBox, boxPaint);
 
-      final textSpan = TextSpan(
-        text:
-            '${detection.labels.first.text} ${(detection.labels.first.confidence * 100).toStringAsFixed(0)}%',
-        style: textStyle,
-      );
-      final textPainter = TextPainter(
-        text: textSpan,
-        textAlign: TextAlign.left,
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      textPainter.paint(
-        canvas,
-        Offset(absoluteBox.left + 4, absoluteBox.top + 4),
-      );
+        final textSpan = TextSpan(
+          text:
+              '${detection.labels.first.text} ${(detection.labels.first.confidence * 100).toStringAsFixed(0)}%',
+          style: textStyle,
+        );
+        final textPainter = TextPainter(
+          text: textSpan,
+          textAlign: TextAlign.left,
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(absoluteBox.left + 4, absoluteBox.top + 4),
+        );
+      }
     }
-
     // --- 동적 구도 타겟 & 시각적 피드백 ---
     // (ViewModel이 이미 UI 스케일 기준으로 계산했으므로 로직 동일)
     if (compositionTarget != null) {
