@@ -79,12 +79,18 @@ class CameraViewModel with ChangeNotifier {
 
   // CameraService 상태 변경 리스너
   void _onCameraServiceStateChanged() {
-    if (_cameraService.isCameraInitialized && !_isDetecting) {
+    // [수정] 카메라가 초기화될 때만 스트림을 시작하도록 조건 강화
+    if (_cameraService.isCameraInitialized && !_isDetecting && !_isStreamingModel) {
       _startModelInference();
-      _cameraService.removeListener(_onCameraServiceStateChanged); // 한 번 시작 후 제거
+      // _cameraService.removeListener(_onCameraServiceStateChanged); // 한 번 시작 후 제거
+      // -> 스트림이 멈췄다가 다시 시작될 수 있으므로, 항상 리스닝하는 것이 좋습니다.
+      //    _isStreamingModel 변수를 사용하여 중복 호출 방지
     }
-    // notifyListeners()는 이미 CameraService.addListener(notifyListeners)에서 처리됨
+    notifyListeners(); // CameraService의 상태 변경 시 UI 갱신 (예: 카메라 전환 후)
   }
+  // 모델 추론 스트림 활성화 추적 함수
+  bool _isStreamingModel = false;
+
 
   void setScreenSize(Size size) {
     if (_screenSize == Size.zero) { // 최초 한 번만 설정
@@ -103,7 +109,12 @@ class CameraViewModel with ChangeNotifier {
       // 여기서 모델 추론을 시작하지 않고, CameraService가 준비될 때까지 기다립니다.
       return; 
     }
-    
+        
+    if (_isStreamingModel) { // [추가] 이미 스트리밍 중이면 재시작 방지
+          log('모델 추론 스트림이 이미 실행 중입니다.');
+          return;
+    }
+
     // 이전에 시작되지 않았다면 이미지 스트림을 시작 (CameraService에서)
     _cameraService.startImageStream((CameraImage cameraImage) async {
       // isAiAssistEnabled가 false이면 추론을 건너뜁니다.
@@ -236,15 +247,6 @@ return InputImage.fromBytes(
     // 만약 완전히 스트림을 멈춰야 한다면 _cameraService.stopImageStream() 호출 필요.
   }
 
-  @override
-  void dispose() {
-    log('CameraViewModel 해제');
-    _cameraService.stopImageStream();
-    _cameraService.removeListener(notifyListeners); // CameraService 리스너 해제
-    _cameraService.removeListener(_onCameraServiceStateChanged); // 추가된 리스너 해제
-    _objectDetector.close();
-    super.dispose();
-  }
 
   Future<void> setCameraResolution(CameraResolution resolution) async {
     if (_cameraResolution == resolution) return;
@@ -255,5 +257,23 @@ return InputImage.fromBytes(
     // 이는 카메라 미리보기 스트림을 일시 중지하고 다시 시작해야 할 수 있습니다.
     log('카메라 해상도 변경: ${resolution.name}');
     await _cameraService.updateCameraResolution(resolution);
+  }
+
+  // 카메라 전환 함수
+  Future<void> switchCamera() async {
+    await _cameraService.switchCamera();
+    // CameraService에서 notifyListeners()를 호출하므로, ViewModel은 자동으로 UI를 갱신합니다.
+    // 여기서 notifyListeners()를 다시 호출할 필요는 없습니다.
+  }
+  
+  @override
+  void dispose() {
+    log('CameraViewModel 해제');
+    _cameraService.stopImageStream();
+    _isStreamingModel = false;  // 스트림 상태 초기화
+    _cameraService.removeListener(notifyListeners); // CameraService 리스너 해제
+    _cameraService.removeListener(_onCameraServiceStateChanged); // 추가된 리스너 해제
+    _objectDetector.close();
+    super.dispose();
   }
 }

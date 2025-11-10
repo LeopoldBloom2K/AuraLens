@@ -27,7 +27,7 @@ class SettingsScreen extends StatelessWidget {
                 onChanged: (value) {
                   viewModel.toggleGrid(value); // ViewModel에 값 전달
                 },
-                activeColor: Theme.of(context).colorScheme.primary, // 활성화 색상
+                activeThumbColor: Theme.of(context).colorScheme.primary, // 활성화 색상
               ),
               SwitchListTile(
                 title: const Text('AI 어시스턴트 사용', style: TextStyle(color: Colors.white)),
@@ -35,7 +35,7 @@ class SettingsScreen extends StatelessWidget {
                 onChanged: (value) {
                   viewModel.toggleAiAssist(value); // ViewModel에 값 전달
                 },
-                activeColor: Theme.of(context).colorScheme.primary,
+                activeThumbColor: Theme.of(context).colorScheme.primary,
               ),
               // TODO: AI 구도 가이드 모드 선택 (RadioListTile 등으로 구현)
               // 현재는 3x3 그리드와 AI 어시스트의 단순 토글만 있지만,
