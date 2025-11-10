@@ -16,7 +16,7 @@ void main() async {
       providers: [
         // CameraService를 ChangeNotifierProvider로 제공
         ChangeNotifierProvider(
-          create: (_) => CameraService(), // 앱 시작 시 카메라 초기화
+          create: (_) => CameraService()..initializeCamera(), // 앱 시작 시 카메라 초기화
         ),
         ChangeNotifierProvider(
           create: (context) => CameraViewModel(context.read<CameraService>())

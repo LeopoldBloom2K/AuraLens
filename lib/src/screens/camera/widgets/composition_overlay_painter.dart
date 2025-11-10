@@ -122,33 +122,6 @@ class CompositionOverlayPainter extends CustomPainter {
     }
   }
 
-  /// ML Kit 좌표계(이미지)를 Flutter UI 좌표계(위젯)로 변환 (중요)
-  Rect scaleRect({
-    required Rect rect,
-    required Size imageSize,
-    required Size widgetSize,
-  }) {
-    // CameraPreview는 기본적으로 'AspectRatio' 모드(contain)가 아니라
-    // 'cover' 모드(화면을 꽉 채움)로 작동하려는 경향이 있습니다.
-    // 여기서는 'AspectRatio' 위젯으로 'contain'을 강제했다고 가정합니다.
-
-    final double scaleX = widgetSize.width / imageSize.width;
-    final double scaleY = widgetSize.height / imageSize.height;
-
-    // AspectRatio(contain) 모드를 가정하여, 더 작은 스케일 팩터를 사용 (레터박스 대응)
-    final double scale = scaleX < scaleY ? scaleX : scaleY;
-
-    final double offsetX = (widgetSize.width - imageSize.width * scale) / 2.0;
-    final double offsetY = (widgetSize.height - imageSize.height * scale) / 2.0;
-
-    return Rect.fromLTRB(
-      rect.left * scale + offsetX,
-      rect.top * scale + offsetY,
-      rect.right * scale + offsetX,
-      rect.bottom * scale + offsetY,
-    );
-  }
-
   @override
   bool shouldRepaint(covariant CompositionOverlayPainter oldDelegate) {
     // 상태가 변경되었을때만 다시 그리도록 최적화

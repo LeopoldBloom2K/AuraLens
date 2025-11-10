@@ -1,10 +1,10 @@
-// lib/src/screens/camera/camera_view_model.dart  tflitemodel -> google ML kit으로 변경
+// lib/src/screens/camera/camera_view_model.dart
 
 import 'dart:developer';
-import 'dart:io'; // Platform 확인
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // SystemChrome
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:gallery_saver/gallery_saver.dart';
@@ -14,41 +14,52 @@ import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:auralens/src/models/camera_settings.dart';
 import 'package:auralens/src/utils/coordinate_scaler.dart';
 
+// Isolate 함수 클래스 밖으로 이동함
+Future<List<DetectedObject>> _runModelOnIsolate(InputImage inputImage) async {
+    final options = ObjectDetectorOptions(
+      mode: DetectionMode.stream,
+      classifyObjects: true,
+      multipleObjects: true,
+    );
+    final detector = ObjectDetector(options: options);
+    final results = await detector.processImage(inputImage);
+    detector.close();
+    return results;
+  }
+
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
   final CompositionService _compositionService = CompositionService();
 
-  // ML Kit ObjectDetector 인스턴스
   late final ObjectDetector _objectDetector;
 
-  // 최근 저장된 사진 썸네일 상태 변수 
   XFile? _recentPhoto;
-
-
   bool _isDetecting = false;
-  List<DetectedObject> _detections = []; // ML Kit의 모델을 직접 사용
+  List<DetectedObject> _detections = [];
   Offset? _compositionTarget;
   bool _isCompositionCorrect = false;
   Size _screenSize = Size.zero;
-  Size? _imageSize; // 카메라 이미지 원본 크기
+  Size? _imageSize;
 
   // UI가 구독할 Getter
   List<DetectedObject> get detections => _detections;
-
   CameraService get cameraService => _cameraService;
-
   Offset? get compositionTarget => _compositionTarget;
-
   bool get isCompositionCorrect => _isCompositionCorrect;
+  Size? get imageSize => _imageSize;
+  XFile? get recentPhoto => _recentPhoto;
 
-  Size? get imageSize => _imageSize; // Painter의 좌표 스케일링에 필요
-  XFile? get recentPhoto => _recentPhoto; // 썸네일
+  bool _isGridEnabled = true;
+  bool _isAiAssistEnabled = true;
+  CameraResolution _cameraResolution = CameraResolution.medium;
+
+  bool get isGridEnabled => _isGridEnabled;
+  bool get isAiAssistEnabled => _isAiAssistEnabled;
+  CameraResolution get cameraResolution => _cameraResolution;
 
   CameraViewModel(this._cameraService) {
-    _cameraService.addListener(notifyListeners);
+    _cameraService.addListener(notifyListeners); // CameraService의 변경사항을 구독
 
-    // 1. ML Kit ObjectDetector 초기화
-    // 기본 "Stream" 모드, 'person'만 감지하도록 설정
     final options = ObjectDetectorOptions(
       mode: DetectionMode.stream,
       classifyObjects: true,
@@ -56,73 +67,70 @@ class CameraViewModel with ChangeNotifier {
     );
     _objectDetector = ObjectDetector(options: options);
 
-    // 2. 추론 루프 시작
-    _startModelInference();
+    // 카메라 초기화가 완료된 후 이미지 스트림을 시작하도록 변경 (CameraService에서 관리)
+    // _startModelInference(); 대신 CameraService의 상태를 관찰합니다.
+    if (_cameraService.isCameraInitialized) {
+      _startModelInference();
+    } else {
+      // 카메라 초기화 완료 시 _startModelInference를 호출하기 위한 리스너 추가
+      _cameraService.addListener(_onCameraServiceStateChanged);
+    }
+  }
+
+  // CameraService 상태 변경 리스너
+  void _onCameraServiceStateChanged() {
+    if (_cameraService.isCameraInitialized && !_isDetecting) {
+      _startModelInference();
+      _cameraService.removeListener(_onCameraServiceStateChanged); // 한 번 시작 후 제거
+    }
+    // notifyListeners()는 이미 CameraService.addListener(notifyListeners)에서 처리됨
   }
 
   void setScreenSize(Size size) {
-    if (_screenSize == Size.zero) {
+    if (_screenSize == Size.zero) { // 최초 한 번만 설정
       _screenSize = size;
       log('ViewModel: 화면 크기 설정됨: $_screenSize');
     }
   }
 
-  Future<List<DetectedObject>> _runModelOnIsolate(InputImage inputImage) async {
-  // Isolate에서는 ViewModel의 _objectDetector에 접근할 수 없으므로,
-  // 여기서 새로 생성하거나, Isolate 생성 시 전달해야 합니다.
-  // (간단한 예시를 위해 매번 생성)
-  final options = ObjectDetectorOptions(
-    mode: DetectionMode.stream,
-    classifyObjects: true,
-    multipleObjects: true,
-  );
-  final detector = ObjectDetector(options: options);
-  final results = await detector.processImage(inputImage);
-  detector.close();
-  return results;
-}
 
   void _startModelInference() async {
-    log('CameraViewModel: ML Kit 추론 루프 시작');
+    // [수정] null 체크 및 초기화 상태 확인을 더 간결하게
+    final bool isCameraReady = _cameraService.controller?.value.isInitialized ?? false;
+
+    if (!isCameraReady) {
+      log('카메라 컨트롤러가 초기화되지 않았습니다. 모델 추론을 시작할 수 없습니다.');
+      // 여기서 모델 추론을 시작하지 않고, CameraService가 준비될 때까지 기다립니다.
+      return; 
+    }
+    
+    // 이전에 시작되지 않았다면 이미지 스트림을 시작 (CameraService에서)
     _cameraService.startImageStream((CameraImage cameraImage) async {
-      if (_cameraService.controller == null || !_cameraService.controller!.value.isInitialized) {
-        log('카메라 컨트롤러가 초기화되지 않았습니다. 모델 추론을 시작할 수 없습니다.');
-        return;
+      // isAiAssistEnabled가 false이면 추론을 건너뜁니다.
+      if (!_isAiAssistEnabled) { 
+          _detections = []; // 오버레이 지우기
+          _compositionTarget = null;
+          _isCompositionCorrect = false;
+          notifyListeners();
+          return; // AI 어시스트가 비활성화되면 추론 로직 건너뛰기
       }
-      
+
+      if (_isDetecting) return; // 이미 추론 중이면 스킵
+
       _isDetecting = true;
       try {
-        // ML Kit가 요구하는 InputImage로 변환
         final InputImage? inputImage = _inputImageFromCameraImage(cameraImage);
         if (inputImage == null) {
           _isDetecting = false;
           return;
         }
+
         final List<DetectedObject> results = await compute(_runModelOnIsolate, inputImage);
-          // 이미지 크기 저장 (Painter의 스케일링 계산용)
-          _imageSize = inputImage.metadata?.size;
+        _imageSize = inputImage.metadata?.size;
+        _detections = results;
+        _updateComposition(_detections);
 
-          // // 4. 'person' 레이블 필터링
-          // final List<DetectedObject> personDetections = results
-          //     .where(
-          //       (obj) =>
-          //       obj.labels.any(
-          //             (label) => label.text.toLowerCase() == 'person',
-          //       ),
-          // )
-          //     .toList();
-
-          // 모든 감지된 객체를 저장함
-          _detections = results;
-
-          // TODO: 여기에서 '주요 객체' (예: 음식, 사람)를 선별하고,
-          // 이 객체들을 이용해 구도 분석을 수행하는 함수를 호출합니다.
-          // List<DetectedObject> mainObjects = _filterMainObjects(_detections);
-          // _updateComposition(mainObjects); // 이제 mainObjects를 기반으로 구도 업데이트
-
-          // 6. 상태 업데이트
-          _updateComposition(_detections);
-        } catch (e) {
+      } catch (e) {
         log('ML Kit 추론 실패: $e');
       } finally {
         if (hasListeners) {
@@ -131,18 +139,13 @@ class CameraViewModel with ChangeNotifier {
         _isDetecting = false;
       }
     });
+    log('CameraViewModel: ML Kit 추론 루프 시작 (Image Stream)');
   }
 
-  /// ML Kit에 최적화된 구도 계산
-  void _updateComposition(List<DetectedObject> personDetections) {
-    if (personDetections.isNotEmpty && _imageSize != null) {
-      // ML Kit는 이미지 원본 기준 절대 좌표(Rect)를 반환
-      final Rect imageBox = personDetections.first.boundingBox;
+  void _updateComposition(List<DetectedObject> detections) {
+    if (detections.isNotEmpty && _imageSize != null && _screenSize != Size.zero) {
+      final Rect imageBox = detections.first.boundingBox; // 일단 첫 번째 객체 사용
 
-      // TODO: (중요) Painter에서 스케일링을 하므로 여기서는 상대 좌표로 변환
-      // (이 부분은 Painter에서 처리하는 것이 더 정확함)
-
-      // ViewModel은 UI 좌표계로 변환하여 CompositionService에 전달
       final Rect scaledBox = scaleRect(
         rect: imageBox,
         imageSize: _imageSize!,
@@ -164,47 +167,42 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-  /// 사진 촬영
   Future<void> takePicture() async {
     final XFile? photo = await _cameraService.takePicture();
     if (photo == null) return;
-    // 촬영한 사진 상태 변수에 저장 후 UI에 알림
     _recentPhoto = photo;
-    notifyListeners(); // UI (썸네일) 갱신
+    notifyListeners();
 
     try {
       await GallerySaver.saveImage(photo.path);
       log('사진 저장 성공: ${photo.path}');
-      // TODO: 사용자에게 "저장 완료" 피드백 (Snackbar 등)
     } catch (e) {
       log('사진 저장 실패: $e');
     }
   }
 
-  /// CameraImage를 ML Kit InputImage로 변환 (좌표 변환의 핵심)
-  ///
   InputImage? _inputImageFromCameraImage(CameraImage image) {
-    final camera = _cameraService.controller!.description;
-    final sensorOrientation = camera.sensorOrientation; // 90, 180, 270...
+    // [수정] null 체크 추가: _cameraService.controller가 null이면 바로 반환
+    final CameraController? controller = _cameraService.controller;
+    if (controller == null) {
+      log('_inputImageFromCameraImage: CameraController is null.');
+      return null;
+    }
+
+    final camera = controller.description;
+    final sensorOrientation = camera.sensorOrientation;
     final writeBuffer = WriteBuffer();
     for (final Plane plane in image.planes) {
       writeBuffer.putUint8List(plane.bytes);
     }
-    final bytes = writeBuffer
-        .done()
-        .buffer 
-        .asUint8List();
+    final bytes = writeBuffer.done().buffer.asUint8List();
 
     InputImageRotation rotation;
     if (Platform.isIOS) {
-      rotation =
-          InputImageRotationValue.fromRawValue(sensorOrientation) ??
-              InputImageRotation.rotation0deg;
+      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ?? InputImageRotation.rotation0deg;
     } else if (Platform.isAndroid) {
       var rotationCompensation = (sensorOrientation + 360) % 360;
-      rotation =
-          InputImageRotationValue.fromRawValue(rotationCompensation) ??
-              InputImageRotation.rotation0deg;
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation) ?? InputImageRotation.rotation0deg;
     } else {
       rotation = InputImageRotation.rotation0deg;
     }
@@ -212,71 +210,39 @@ class CameraViewModel with ChangeNotifier {
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
 
-    return InputImage.fromBytes(
-      bytes: image.planes[0].bytes, // YUV의 Y평면 (또는 BGRA)
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
+    // YUV 플래너(Planar) 이미지이므로,
+    // 전체 바이트 버퍼(bytes) 대신 첫 번째 평면(Y)의 바이트(image.planes[0].bytes)를 사용합니다.
+return InputImage.fromBytes(
+  bytes: image.planes[0].bytes, 
+  metadata: InputImageMetadata(
+    size: Size(image.width.toDouble(), image.height.toDouble()),
+    rotation: rotation,
+    format: format,
+    bytesPerRow: image.planes[0].bytesPerRow, // Y 평면의 bytesPerRow
+  ),
+);
   }
 
-  /// ML Kit 좌표(이미지 기준)를 UI 좌표(위젯 기준)로 스케일링
-  Rect scaleRect({
-    required Rect rect,
-    required Size imageSize,
-    required Size widgetSize,
-  }) {
-    // (이 스케일링 로직은 CameraPreview가 '모cover' 드일 때를 가정한 것이며,
-    // 'contain' (AspectRatio) 모드에서는 더 복잡한 계산이 필요합니다.)
-
-    final double scaleX = widgetSize.width / imageSize.width;
-    final double scaleY = widgetSize.height / imageSize.height;
-
-    // TODO: AspectRatio에 맞춘 정확한 스케일링 필요
-    // (우선은 단순 비율로 계산)
-    return Rect.fromLTRB(
-      rect.left * scaleX,
-      rect.top * scaleY,
-      rect.right * scaleX,
-      rect.bottom * scaleY,
-    );
-  }
-
-  // [신규] UI 토글 상태 변수
-  bool _isGridEnabled = true; // 그리드 (기본값: 켜기)
-  bool _isAiAssistEnabled = true; // AI 어시스트 (기본값: 켜기)
-  // AiMode _currentMode = AiMode.person; // (추후 풍경 모드 추가 시)
-  CameraResolution _cameraResolution = CameraResolution.medium; // 기본값
-
-  // [신규] UI가 구독할 Getter
-  bool get isGridEnabled => _isGridEnabled;
-  bool get isAiAssistEnabled => _isAiAssistEnabled;
-  CameraResolution get cameraResolution => _cameraResolution;
-
-  // [신규] UI가 호출할 토글 함수
   void toggleGrid(bool value) {
     _isGridEnabled = value;
     notifyListeners();
-    // TODO: 만약 그리드 활성화/비활성화 시 CameraService에 알려야 한다면 여기서 호출
   }
 
   void toggleAiAssist(bool value) {
     _isAiAssistEnabled = value;
-    notifyListeners(); // UI 갱신 알림
-    // TODO: AI 어시스트 활성화/비활성화 시 추론 루프를 시작/정지해야 한다면 여기서 호출
-    // 현재는 _startModelInference()가 isAiAssistEnabled를 사용하고 있으므로,
-    // 이 값을 변경하면 자연스럽게 동작합니다.
+    notifyListeners();
+    // AI 어시스트 상태 변경 시 이미지 스트림 재시작/정지 로직은 CameraService에서 처리하는 것이 더 적절합니다.
+    // 여기서는 단순히 값을 변경하고 UI를 갱신합니다.
+    // 만약 완전히 스트림을 멈춰야 한다면 _cameraService.stopImageStream() 호출 필요.
   }
 
   @override
   void dispose() {
     log('CameraViewModel 해제');
     _cameraService.stopImageStream();
-    _cameraService.controller?.removeListener(notifyListeners);
-    _objectDetector.close(); // ML Kit 리소스 해제
+    _cameraService.removeListener(notifyListeners); // CameraService 리스너 해제
+    _cameraService.removeListener(_onCameraServiceStateChanged); // 추가된 리스너 해제
+    _objectDetector.close();
     super.dispose();
   }
 
@@ -285,11 +251,9 @@ class CameraViewModel with ChangeNotifier {
     _cameraResolution = resolution;
     notifyListeners();
 
-    // TODO: 카메라 해상도 변경 로직 (매우 중요!)
-    // 카메라 컨트롤러를 dispose 하고 새로운 해상도로 다시 initialize 해야 합니다.
-    // 이는 카메라 미리보기 스트림에 영향을 미치므로, 사용자에게 잠시 카메라가 멈출 수 있음을 알리거나
-    // 전환 중 로딩 스피너를 보여주는 것이 좋습니다.
-    // 예: await _cameraService.updateCameraResolution(resolution);
+    // CameraService에서 실제 해상도 변경 로직을 호출합니다.
+    // 이는 카메라 미리보기 스트림을 일시 중지하고 다시 시작해야 할 수 있습니다.
     log('카메라 해상도 변경: ${resolution.name}');
+    await _cameraService.updateCameraResolution(resolution);
   }
 }
