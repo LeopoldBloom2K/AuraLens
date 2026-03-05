@@ -2,16 +2,7 @@
 
 import 'dart:developer';
 import 'package:tflite_flutter/tflite_flutter.dart';
-
-enum SceneCategory {
-  person('인물'),
-  food('음식'),
-  scenery('풍경'),
-  unknown('알 수 없음');
-
-  final String label;
-  const SceneCategory(this.label);
-}
+import 'package:auralens/src/models/camera_settings.dart';
 
 class TFLiteService {
   Interpreter? _interpreter;

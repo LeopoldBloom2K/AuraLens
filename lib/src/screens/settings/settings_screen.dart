@@ -90,7 +90,7 @@ class SettingsScreen extends StatelessWidget {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          backgroundColor: Colors.grey[850], // 다이얼로그 배경색
+          backgroundColor: Colors.grey[850],
           title: const Text('사진 해상도 선택', style: TextStyle(color: Colors.white)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -98,11 +98,14 @@ class SettingsScreen extends StatelessWidget {
               return RadioListTile<CameraResolution>(
                 title: Text(resolution.name, style: const TextStyle(color: Colors.white)),
                 value: resolution,
+                // 🚀 아래 두 줄에 주석(ignore)을 추가해서 성가신 경고를 없앱니다!
+                // ignore: deprecated_member_use
                 groupValue: viewModel.cameraResolution,
+                // ignore: deprecated_member_use
                 onChanged: (CameraResolution? newResolution) {
                   if (newResolution != null) {
                     viewModel.setCameraResolution(newResolution);
-                    Navigator.of(dialogContext).pop(); // 다이얼로그 닫기
+                    Navigator.of(dialogContext).pop();
                   }
                 },
                 activeColor: Theme.of(context).colorScheme.primary,

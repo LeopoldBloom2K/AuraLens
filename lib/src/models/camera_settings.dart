@@ -10,3 +10,5 @@ enum CameraResolution {
   final String value;
   const CameraResolution(this.name, this.value);
 }
+
+enum SceneCategory { unknown, food, person, scenery }
