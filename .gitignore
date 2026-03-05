@@ -3,6 +3,9 @@ build/
 .dart_tool/
 .packages
 .metadata
+.dart_tool/*
+.flutter-plugins
+
 
 # IDE 및 편집기 설정
 .idea/
@@ -15,17 +18,10 @@ app.apk
 app.aab
 app.ipa
 symlinked-plugins/
+build/*
 
 # iOS 빌드 아티팩트
-ios/Pods/
-ios/Flutter/ephemeral/
-ios/.symlinks/
-ios/Runner.xcworkspace/
-ios/Runner.xcodeproj/project.xcworkspace/
-ios/Runner.xcodeproj/xcuserdata/
-ios/Flutter/Generated.xcconfig
-ios/Flutter/Flutter.podspec
-ios/Podfile.lock
+ios/*
 
 # Android 빌드 아티팩트
 android/.gradle/
