@@ -11,6 +11,7 @@ import 'package:auralens/src/screens/camera/camera_view_model.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
 import 'package:auralens/src/screens/settings/settings_screen.dart';
+import 'package:open_filex/open_filex.dart';
 
 /// README의 메인 카메라 UI 스크린
 class CameraScreen extends StatelessWidget {

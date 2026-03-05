@@ -177,7 +177,10 @@ class CameraService with ChangeNotifier {
 
   // [추가] 카메라 해상도 업데이트 로직
   Future<void> updateCameraResolution(CameraResolution newResolution) async {
-    if (_controller == null || _currentResolution == newResolution) return;
+    if (controller == null || !controller!.value.isInitialized) {
+      log('카메라가 아직 준비되지 않아 해상도 변경을 보류합니다.');
+      return;
+    }
 
     log('카메라 해상도 변경 시도: ${newResolution.name}');
 

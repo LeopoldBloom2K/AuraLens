@@ -7,28 +7,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
-import 'package:gallery_saver/gallery_saver.dart';
+import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/services/composition_service.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:auralens/src/models/camera_settings.dart';
 import 'package:auralens/src/utils/coordinate_scaler.dart';
+import 'package:auralens/src/services/tflite_service.dart';
+import 'package:auralens/src/utils/image_converter.dart';
 
-// Isolate 함수 클래스 밖으로 이동함
+// Isolate 함수 클래스 밖으로 이동함 (ML Kit 백그라운드 처리용)
 Future<List<DetectedObject>> _runModelOnIsolate(InputImage inputImage) async {
-    final options = ObjectDetectorOptions(
-      mode: DetectionMode.stream,
-      classifyObjects: true,
-      multipleObjects: true,
-    );
-    final detector = ObjectDetector(options: options);
-    final results = await detector.processImage(inputImage);
-    detector.close();
-    return results;
-  }
+  final options = ObjectDetectorOptions(
+    mode: DetectionMode.stream,
+    classifyObjects: true,
+    multipleObjects: true,
+  );
+  final detector = ObjectDetector(options: options);
+  final results = await detector.processImage(inputImage);
+  detector.close();
+  return results;
+}
 
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
+  final TFLiteService _tfliteService; // TFLite 서비스
   final CompositionService _compositionService = CompositionService();
 
   late final ObjectDetector _objectDetector;
@@ -40,6 +43,10 @@ class CameraViewModel with ChangeNotifier {
   bool _isCompositionCorrect = false;
   Size _screenSize = Size.zero;
   Size? _imageSize;
+
+  // 현재 인식된 화면 상황 (기본 unknown)
+  SceneCategory _currentScene = SceneCategory.unknown; 
+  SceneCategory get currentScene => _currentScene;
 
   // UI가 구독할 Getter
   List<DetectedObject> get detections => _detections;
@@ -57,7 +64,10 @@ class CameraViewModel with ChangeNotifier {
   bool get isAiAssistEnabled => _isAiAssistEnabled;
   CameraResolution get cameraResolution => _cameraResolution;
 
-  CameraViewModel(this._cameraService) {
+  // 모델 추론 스트림 활성화 추적 변수
+  bool _isStreamingModel = false;
+
+  CameraViewModel(this._cameraService, this._tfliteService) {
     _cameraService.addListener(notifyListeners); // CameraService의 변경사항을 구독
 
     final options = ObjectDetectorOptions(
@@ -67,30 +77,20 @@ class CameraViewModel with ChangeNotifier {
     );
     _objectDetector = ObjectDetector(options: options);
 
-    // 카메라 초기화가 완료된 후 이미지 스트림을 시작하도록 변경 (CameraService에서 관리)
-    // _startModelInference(); 대신 CameraService의 상태를 관찰합니다.
     if (_cameraService.isCameraInitialized) {
       _startModelInference();
     } else {
-      // 카메라 초기화 완료 시 _startModelInference를 호출하기 위한 리스너 추가
       _cameraService.addListener(_onCameraServiceStateChanged);
     }
   }
 
   // CameraService 상태 변경 리스너
   void _onCameraServiceStateChanged() {
-    // [수정] 카메라가 초기화될 때만 스트림을 시작하도록 조건 강화
     if (_cameraService.isCameraInitialized && !_isDetecting && !_isStreamingModel) {
       _startModelInference();
-      // _cameraService.removeListener(_onCameraServiceStateChanged); // 한 번 시작 후 제거
-      // -> 스트림이 멈췄다가 다시 시작될 수 있으므로, 항상 리스닝하는 것이 좋습니다.
-      //    _isStreamingModel 변수를 사용하여 중복 호출 방지
     }
-    notifyListeners(); // CameraService의 상태 변경 시 UI 갱신 (예: 카메라 전환 후)
+    notifyListeners(); 
   }
-  // 모델 추론 스트림 활성화 추적 함수
-  bool _isStreamingModel = false;
-
 
   void setScreenSize(Size size) {
     if (_screenSize == Size.zero) { // 최초 한 번만 설정
@@ -99,34 +99,35 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-
+  // =========================================================
+  // 🚀 핵심: 두 가지 AI 모델(ML Kit + TFLite) 병렬 실행 로직
+  // =========================================================
   void _startModelInference() async {
-    // [수정] null 체크 및 초기화 상태 확인을 더 간결하게
     final bool isCameraReady = _cameraService.controller?.value.isInitialized ?? false;
 
     if (!isCameraReady) {
       log('카메라 컨트롤러가 초기화되지 않았습니다. 모델 추론을 시작할 수 없습니다.');
-      // 여기서 모델 추론을 시작하지 않고, CameraService가 준비될 때까지 기다립니다.
       return; 
     }
         
-    if (_isStreamingModel) { // [추가] 이미 스트리밍 중이면 재시작 방지
-          log('모델 추론 스트림이 이미 실행 중입니다.');
-          return;
+    if (_isStreamingModel) { 
+      log('모델 추론 스트림이 이미 실행 중입니다.');
+      return;
     }
 
-    // 이전에 시작되지 않았다면 이미지 스트림을 시작 (CameraService에서)
+    _isStreamingModel = true;
+
     _cameraService.startImageStream((CameraImage cameraImage) async {
-      // isAiAssistEnabled가 false이면 추론을 건너뜁니다.
       if (!_isAiAssistEnabled) { 
-          _detections = []; // 오버레이 지우기
+          _detections = []; 
           _compositionTarget = null;
           _isCompositionCorrect = false;
+          _currentScene = SceneCategory.unknown; // 씬 상태 초기화
           notifyListeners();
-          return; // AI 어시스트가 비활성화되면 추론 로직 건너뛰기
+          return; 
       }
 
-      if (_isDetecting) return; // 이미 추론 중이면 스킵
+      if (_isDetecting) return; // 이미 추론 중이면 프레임 스킵
 
       _isDetecting = true;
       try {
@@ -136,13 +137,32 @@ class CameraViewModel with ChangeNotifier {
           return;
         }
 
-        final List<DetectedObject> results = await compute(_runModelOnIsolate, inputImage);
+        // 1. [ML Kit] 바운딩 박스 찾기 (비동기)
+        final mlKitFuture = compute(_runModelOnIsolate, inputImage);
+        
+        // 2. [TFLite] 이미지 전처리 후 장면 분류하기 (비동기)
+        final tfliteFuture = compute(ImageConverter.convertCameraImageToModelInput, cameraImage)
+            .then((inputMatrix) => _tfliteService.classifyScene(inputMatrix));
+
+        // 두 AI 연산이 끝날 때까지 동시에 기다림
+        final results = await Future.wait([mlKitFuture, tfliteFuture]);
+        
+        final detectedObjects = results[0] as List<DetectedObject>;
+        final sceneCategory = results[1] as SceneCategory;
+
         _imageSize = inputImage.metadata?.size;
-        _detections = results;
+        _detections = detectedObjects;
+        
+        // 상황이 바뀌었을 때만 로그 출력 및 씬 업데이트
+        if (_currentScene != sceneCategory) {
+          _currentScene = sceneCategory;
+          log('📸 현재 촬영 상황 변경 인식: ${_currentScene.label}');
+        }
+
         _updateComposition(_detections);
 
       } catch (e) {
-        log('ML Kit 추론 실패: $e');
+        log('AI 추론 실패: $e');
       } finally {
         if (hasListeners) {
           notifyListeners();
@@ -150,7 +170,7 @@ class CameraViewModel with ChangeNotifier {
         _isDetecting = false;
       }
     });
-    log('CameraViewModel: ML Kit 추론 루프 시작 (Image Stream)');
+    log('CameraViewModel: ML Kit & TFLite 듀얼 추론 루프 시작 (Image Stream)');
   }
 
   void _updateComposition(List<DetectedObject> detections) {
@@ -178,6 +198,44 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
+  InputImage? _inputImageFromCameraImage(CameraImage image) {
+    final CameraController? controller = _cameraService.controller;
+    if (controller == null) {
+      log('_inputImageFromCameraImage: CameraController is null.');
+      return null;
+    }
+
+    final camera = controller.description;
+    final sensorOrientation = camera.sensorOrientation;
+    final writeBuffer = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      writeBuffer.putUint8List(plane.bytes);
+    }
+    
+    InputImageRotation rotation;
+    if (Platform.isIOS) {
+      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ?? InputImageRotation.rotation0deg;
+    } else if (Platform.isAndroid) {
+      var rotationCompensation = (sensorOrientation + 360) % 360;
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation) ?? InputImageRotation.rotation0deg;
+    } else {
+      rotation = InputImageRotation.rotation0deg;
+    }
+
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    return InputImage.fromBytes(
+      bytes: image.planes[0].bytes, 
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes[0].bytesPerRow, 
+      ),
+    );
+  }
+
   Future<void> takePicture() async {
     final XFile? photo = await _cameraService.takePicture();
     if (photo == null) return;
@@ -192,48 +250,6 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-  InputImage? _inputImageFromCameraImage(CameraImage image) {
-    // [수정] null 체크 추가: _cameraService.controller가 null이면 바로 반환
-    final CameraController? controller = _cameraService.controller;
-    if (controller == null) {
-      log('_inputImageFromCameraImage: CameraController is null.');
-      return null;
-    }
-
-    final camera = controller.description;
-    final sensorOrientation = camera.sensorOrientation;
-    final writeBuffer = WriteBuffer();
-    for (final Plane plane in image.planes) {
-      writeBuffer.putUint8List(plane.bytes);
-    }
-    final bytes = writeBuffer.done().buffer.asUint8List();
-
-    InputImageRotation rotation;
-    if (Platform.isIOS) {
-      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ?? InputImageRotation.rotation0deg;
-    } else if (Platform.isAndroid) {
-      var rotationCompensation = (sensorOrientation + 360) % 360;
-      rotation = InputImageRotationValue.fromRawValue(rotationCompensation) ?? InputImageRotation.rotation0deg;
-    } else {
-      rotation = InputImageRotation.rotation0deg;
-    }
-
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format == null) return null;
-
-    // YUV 플래너(Planar) 이미지이므로,
-    // 전체 바이트 버퍼(bytes) 대신 첫 번째 평면(Y)의 바이트(image.planes[0].bytes)를 사용합니다.
-return InputImage.fromBytes(
-  bytes: image.planes[0].bytes, 
-  metadata: InputImageMetadata(
-    size: Size(image.width.toDouble(), image.height.toDouble()),
-    rotation: rotation,
-    format: format,
-    bytesPerRow: image.planes[0].bytesPerRow, // Y 평면의 bytesPerRow
-  ),
-);
-  }
-
   void toggleGrid(bool value) {
     _isGridEnabled = value;
     notifyListeners();
@@ -242,37 +258,28 @@ return InputImage.fromBytes(
   void toggleAiAssist(bool value) {
     _isAiAssistEnabled = value;
     notifyListeners();
-    // AI 어시스트 상태 변경 시 이미지 스트림 재시작/정지 로직은 CameraService에서 처리하는 것이 더 적절합니다.
-    // 여기서는 단순히 값을 변경하고 UI를 갱신합니다.
-    // 만약 완전히 스트림을 멈춰야 한다면 _cameraService.stopImageStream() 호출 필요.
   }
-
 
   Future<void> setCameraResolution(CameraResolution resolution) async {
     if (_cameraResolution == resolution) return;
     _cameraResolution = resolution;
     notifyListeners();
 
-    // CameraService에서 실제 해상도 변경 로직을 호출합니다.
-    // 이는 카메라 미리보기 스트림을 일시 중지하고 다시 시작해야 할 수 있습니다.
     log('카메라 해상도 변경: ${resolution.name}');
     await _cameraService.updateCameraResolution(resolution);
   }
 
-  // 카메라 전환 함수
   Future<void> switchCamera() async {
     await _cameraService.switchCamera();
-    // CameraService에서 notifyListeners()를 호출하므로, ViewModel은 자동으로 UI를 갱신합니다.
-    // 여기서 notifyListeners()를 다시 호출할 필요는 없습니다.
   }
   
   @override
   void dispose() {
     log('CameraViewModel 해제');
     _cameraService.stopImageStream();
-    _isStreamingModel = false;  // 스트림 상태 초기화
-    _cameraService.removeListener(notifyListeners); // CameraService 리스너 해제
-    _cameraService.removeListener(_onCameraServiceStateChanged); // 추가된 리스너 해제
+    _isStreamingModel = false;  
+    _cameraService.removeListener(notifyListeners); 
+    _cameraService.removeListener(_onCameraServiceStateChanged); 
     _objectDetector.close();
     super.dispose();
   }
