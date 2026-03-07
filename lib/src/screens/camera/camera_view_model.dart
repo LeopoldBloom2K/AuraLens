@@ -1,6 +1,7 @@
 // lib/src/screens/camera/camera_view_model.dart
 
 import 'dart:developer';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
@@ -8,13 +9,18 @@ import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/services/tflite_service.dart';
 import 'package:auralens/src/utils/image_converter.dart';
-import 'package:auralens/src/models/camera_settings.dart'; // 🚀 여기서 SceneCategory를 불러옵니다!
+import 'package:auralens/src/models/camera_settings.dart'; 
 
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
   final TFLiteService _tfliteService;
 
   XFile? _recentPhoto;
+
+  // 촬영한 모든 사진을 저장하는 List 
+  final List<XFile> _sessionPhotos = [];
+  List<XFile> get sessionPhotos => _sessionPhotos;
+
   bool _isDetecting = false;
 
   Offset? _compositionTarget;
@@ -36,13 +42,38 @@ class CameraViewModel with ChangeNotifier {
 
   bool _isGridEnabled = true;
   bool _isAiAssistEnabled = true;
-  CameraResolution _cameraResolution = CameraResolution.medium;
+  CameraResolution _cameraResolution = CameraResolution.max;
+
+  // 현재 화면 비율 상태 변수 (기본 4:3)
+  CameraRatio _currentRatio = CameraRatio.ratio4_3;
+  CameraRatio get currentRatio => _currentRatio;
+
+  // 🚀 비율 토글 함수
+  void toggleRatio() {
+    switch (_currentRatio) {
+      case CameraRatio.ratio4_3:
+        _currentRatio = CameraRatio.ratio16_9;
+        break;
+      case CameraRatio.ratio16_9:
+        _currentRatio = CameraRatio.ratio1_1;
+        break;
+      case CameraRatio.ratio1_1:
+        _currentRatio = CameraRatio.ratio4_3;
+        break;
+    }
+    notifyListeners();
+  }
+
 
   bool get isGridEnabled => _isGridEnabled;
   bool get isAiAssistEnabled => _isAiAssistEnabled;
   CameraResolution get cameraResolution => _cameraResolution;
 
   bool _isStreamingModel = false;
+
+  // 🚀 무거운 ResNet 모델과 테스트 기기의 성능을 고려해 추론 간격을 500ms(0.5초)로 수정
+  DateTime _lastInferenceTime = DateTime.now();
+  final int _inferenceIntervalMs = 500; 
 
   CameraViewModel(this._cameraService, this._tfliteService) {
     _cameraService.addListener(notifyListeners);
@@ -94,7 +125,17 @@ class CameraViewModel with ChangeNotifier {
 
       if (_isDetecting) return;
 
+      final now = DateTime.now();
+      
+      // 500ms 간격 체크, 너무 빠르면 프레임 드랍(스킵) 처리
+      if (now.difference(_lastInferenceTime).inMilliseconds < _inferenceIntervalMs) {   
+        return;
+      }
+      
+      // 🚀 추론 시작 시점 기록
+      _lastInferenceTime = now;
       _isDetecting = true;
+
       try {
         final rawResult = await compute(ImageConverter.convertCameraImageToModelInput, cameraImage)
             .then((inputMatrix) => _tfliteService.classifyScene(inputMatrix));
@@ -129,13 +170,15 @@ class CameraViewModel with ChangeNotifier {
         _isDetecting = false;
       }
     });
-    log('CameraViewModel: TFLite 추론 루프 시작 🚀');
+    log('CameraViewModel: TFLite 추론 루프 시작 (쿨다운 0.5초) 🚀');
   }
 
   Future<void> takePicture() async {
     final XFile? photo = await _cameraService.takePicture();
     if (photo == null) return;
     _recentPhoto = photo;
+    // List에 새로 촬영한 사진 추가 (최신 사진이 앞에 오도록)
+    _sessionPhotos.insert(0, photo);
     notifyListeners();
 
     try {
@@ -166,7 +209,27 @@ class CameraViewModel with ChangeNotifier {
   }
 
   Future<void> switchCamera() async {
+    _isStreamingModel = false;                     // 카메라 전환 시 모델 추론 중지
+    _isDetecting = false;                          // 카메라 전환 시 추론 상태 초기화
+    _sceneHistory.clear();                         // 카메라 전환 시 투표 기록 초기화
+    
     await _cameraService.switchCamera();
+  }
+
+  // 갤러리 진입 시: AI 프레임 공급 일시 정지
+  Future<void> pauseInference() async {
+    log('CameraViewModel: 갤러리 진입 - AI 연산 일시 정지');
+    await _cameraService.stopImageStream();
+    _isStreamingModel = false;
+    _isDetecting = false;
+  }
+
+  // 갤러리에서 돌아왔을 때: AI 프레임 공급 재개
+  void resumeInference() {
+    log('CameraViewModel: 카메라 복귀 - AI 연산 재개');
+    if (!_isStreamingModel && _cameraService.isCameraInitialized) {
+      _startModelInference();
+    }
   }
 
   @override
@@ -178,4 +241,24 @@ class CameraViewModel with ChangeNotifier {
     _cameraService.removeListener(_onCameraServiceStateChanged);
     super.dispose();
   }
+
+  void deleteSessionPhoto(XFile photo) {
+    _sessionPhotos.remove(photo); // 리스트에서 제거
+
+    // 만약 지운 사진이 썸네일에 떠 있는 '가장 최근 사진'이라면, 그 이전 사진으로 썸네일 교체
+    if (_recentPhoto?.path == photo.path) {
+      _recentPhoto = _sessionPhotos.isNotEmpty ? _sessionPhotos.first : null;
+    }
+    
+    notifyListeners(); // UI 즉시 새로고침!
+
+    try {
+      File(photo.path).deleteSync(); // 스마트폰 용량 확보를 위해 임시 파일 물리적 삭제
+      log('사진 삭제 완료: ${photo.path}');
+    } catch (e) {
+      log('사진 삭제 실패: $e');
+    }
+  }
+
+
 }

@@ -1,14 +1,16 @@
 // lib/src/screens/camera/camera_screen.dart
 
+import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:auralens/src/screens/camera/camera_view_model.dart';
 import 'package:auralens/src/screens/camera/widgets/composition_overlay_painter.dart';
 import 'package:auralens/src/screens/settings/settings_screen.dart';
-import 'package:open_filex/open_filex.dart';
+import 'package:auralens/src/screens/camera/gallery_screen.dart';
 
 class CameraScreen extends StatelessWidget {
   const CameraScreen({super.key});
@@ -28,26 +30,50 @@ class CameraView extends StatefulWidget {
 
 class _CameraViewState extends State<CameraView> {
   DateTime? _currentBackPressTime;
+  StreamSubscription<AccelerometerEvent>? _accelSubscription;
+  int _iconTurns = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 🚀 수정 1: 가로 모드 아이콘 회전 방향을 현실과 맞게(반대로) 교정 완료!
+    _accelSubscription = accelerometerEventStream().listen((AccelerometerEvent event) {
+      int newTurns = _iconTurns;
+      if (event.x > 5) {
+        newTurns = 1; // 폰을 왼쪽으로 눕힘 -> 아이콘은 시계방향 90도 회전
+      } else if (event.x < -5) {
+        newTurns = 3; // 폰을 오른쪽으로 눕힘 -> 아이콘은 반시계 90도 회전
+      } else if (event.y > 5) {
+        newTurns = 0; // 똑바로 세움
+      } else if (event.y < -5) {
+        newTurns = 2; // 거꾸로
+      }
+
+      if (newTurns != _iconTurns) {
+        setState(() => _iconTurns = newTurns);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _accelSubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cameraService = context.watch<CameraViewModel>().cameraService;
 
-    // 🚀 구형 WillPopScope 대신 최신 PopScope 적용!
     return PopScope(
-      canPop: false, // 기본 뒤로가기 방지
+      canPop: false,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
-
         DateTime now = DateTime.now();
-        if (_currentBackPressTime == null ||
-            now.difference(_currentBackPressTime!) > const Duration(seconds: 2)) {
+        if (_currentBackPressTime == null || now.difference(_currentBackPressTime!) > const Duration(seconds: 2)) {
           _currentBackPressTime = now;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('뒤로 가기 버튼을 한 번 더 누르면 앱이 종료됩니다.'),
-              duration: Duration(seconds: 2),
-            ),
+            const SnackBar(content: Text('뒤로 가기 버튼을 한 번 더 누르면 앱이 종료됩니다.'), duration: Duration(seconds: 2)),
           );
         } else {
           SystemNavigator.pop();
@@ -57,25 +83,14 @@ class _CameraViewState extends State<CameraView> {
         backgroundColor: Colors.black,
         body: Builder(
           builder: (context) {
-            if (!cameraService.isCameraInitialized ||
-                cameraService.controller == null) {
+            if (!cameraService.isCameraInitialized || cameraService.controller == null) {
               return _buildLoadingIndicator();
             }
-
             return _buildCameraPreview(context, cameraService.controller!);
           },
         ),
       ),
     );
-  }
-
-  int _getRotationTurns(DeviceOrientation orientation) {
-    switch (orientation) {
-      case DeviceOrientation.portraitUp: return 0;
-      case DeviceOrientation.landscapeLeft: return 1;
-      case DeviceOrientation.portraitDown: return 2;
-      case DeviceOrientation.landscapeRight: return 3;
-    }
   }
 
   Widget _buildLoadingIndicator() {
@@ -95,126 +110,192 @@ class _CameraViewState extends State<CameraView> {
     return Consumer<CameraViewModel>(
       builder: (context, viewModel, child) {
         final CameraValue cameraValue = controller.value;
-        final DeviceOrientation orientation = cameraValue.deviceOrientation;
-        final int turns = _getRotationTurns(orientation);
-        final bool isLandscape = (orientation == DeviceOrientation.landscapeLeft ||
-            orientation == DeviceOrientation.landscapeRight);
+        
+        // 🚀 수정 2: 어떤 기기든 무조건 세로 비율로 계산되도록 강제 보정 (화면 찌그러짐 완벽 방지)
+        final double aspect = cameraValue.aspectRatio;
+        final double portraitAspect = aspect < 1 ? aspect : 1 / aspect;
 
-        return Stack(fit: StackFit.expand, children: [
-          SizedBox.expand(
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: 1000,
-                height: 1000 / cameraValue.aspectRatio,
-                child: CameraPreview(controller),
-              ),
-            ),
-          ),
-
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final widgetSize = Size(constraints.maxWidth, constraints.maxHeight);
-              viewModel.setScreenSize(widgetSize);
-
-              return CustomPaint(
-                painter: CompositionOverlayPainter(
-                  imageSize: viewModel.imageSize,
-                  widgetSize: widgetSize,
-                  isGridEnabled: viewModel.isGridEnabled,
-                  isAiAssistEnabled: viewModel.isAiAssistEnabled,
-                  currentScene: viewModel.currentScene,
-                ),
-              );
-            },
-          ),
-
-          Positioned(
-            top: isLandscape ? 0 : 50,
-            left: isLandscape ? 20 : 0,
-            right: isLandscape ? null : 0,
-            bottom: isLandscape ? 0 : null,
-            child: SafeArea(
-              child: Flex(
-                direction: isLandscape ? Axis.vertical : Axis.horizontal,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildRotatedButton(
-                    context,
-                    turns: turns,
-                    icon: viewModel.isGridEnabled ? Icons.grid_on : Icons.grid_off,
-                    onPressed: () => viewModel.toggleGrid(!viewModel.isGridEnabled),
-                  ),
-                  _buildRotatedButton(
-                    context,
-                    turns: turns,
-                    icon: viewModel.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
-                    onPressed: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),
-                  ),
-                  _buildRotatedButton(
-                    context,
-                    turns: turns,
-                    icon: Icons.settings,
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          Positioned(
-            bottom: isLandscape ? 0 : 20,
-            right: isLandscape ? 20 : 0,
-            left: isLandscape ? null : 0,
-            child: SafeArea(
-              child: Flex(
-                direction: isLandscape ? Axis.vertical : Axis.horizontal,
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildThumbnail(context, turns, viewModel.recentPhoto),
-
-                  GestureDetector(
-                    onTap: () => viewModel.takePicture(),
-                    child: Container(
-                      margin: isLandscape
-                          ? const EdgeInsets.symmetric(vertical: 20)
-                          : const EdgeInsets.symmetric(horizontal: 20),
-                      width: 70,
-                      height: 70,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white,
-                        border: Border.all(color: Colors.grey, width: 4),
-                      ),
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: AspectRatio(
+                aspectRatio: viewModel.currentRatio.value,
+                child: ClipRect(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: 1000,
+                      height: 1000 / portraitAspect,
+                      child: CameraPreview(controller),
                     ),
                   ),
-
-                  _buildRotatedButton(
-                    context,
-                    turns: turns,
-                    icon: Icons.flip_camera_ios,
-                    onPressed: () => viewModel.switchCamera(),
-                  ),
-                ],
+                ),
               ),
             ),
-          )
-        ]);
+
+            Container(
+              alignment: Alignment.center,
+              child: AspectRatio(
+                aspectRatio: viewModel.currentRatio.value,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final widgetSize = Size(constraints.maxWidth, constraints.maxHeight);
+                    viewModel.setScreenSize(widgetSize);
+
+                    return CustomPaint(
+                      painter: CompositionOverlayPainter(
+                        imageSize: viewModel.imageSize,
+                        widgetSize: widgetSize,
+                        isGridEnabled: viewModel.isGridEnabled,
+                        isAiAssistEnabled: viewModel.isAiAssistEnabled,
+                        currentScene: viewModel.currentScene,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+
+            Positioned(
+              top: 50,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildRotatedTextButton(
+                      context,
+                      turns: _iconTurns,
+                      text: viewModel.currentRatio.label,
+                      onPressed: () => viewModel.toggleRatio(),
+                    ),
+                    const SizedBox(width: 16),
+                    _buildRotatedButton(
+                      context,
+                      turns: _iconTurns,
+                      icon: viewModel.isGridEnabled ? Icons.grid_on : Icons.grid_off,
+                      onPressed: () => viewModel.toggleGrid(!viewModel.isGridEnabled),
+                    ),
+                    const SizedBox(width: 16),
+                    _buildRotatedButton(
+                      context,
+                      turns: _iconTurns,
+                      icon: viewModel.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
+                      onPressed: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),
+                    ),
+                    const SizedBox(width: 16),
+                    _buildRotatedButton(
+                      context,
+                      turns: _iconTurns,
+                      icon: Icons.settings,
+                      onPressed: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildThumbnail(context, _iconTurns, viewModel.recentPhoto),
+
+                    GestureDetector(
+                      onTap: () => viewModel.takePicture(),
+                      child: Container(
+                        width: 76,
+                        height: 76,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade400, width: 4),
+                        ),
+                      ),
+                    ),
+
+                    _buildRotatedButton(
+                      context,
+                      turns: _iconTurns,
+                      icon: Icons.flip_camera_ios,
+                      size: 36,
+                      onPressed: () => viewModel.switchCamera(),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          ],
+        );
       },
     );
   }
 
-  Widget _buildRotatedButton(BuildContext context, {required int turns, required IconData icon, required VoidCallback onPressed}) {
+  Widget _buildRotatedButton(BuildContext context, {required int turns, required IconData icon, required VoidCallback onPressed, double size = 30}) {
     return IconButton(
-      icon: RotatedBox(quarterTurns: turns, child: Icon(icon, color: Colors.white, size: 30)),
+      icon: AnimatedRotation(
+        turns: turns * 0.25,
+        duration: const Duration(milliseconds: 300),
+        child: Icon(icon, color: Colors.white, size: size,
+        shadows: [
+            Shadow(
+              color: Colors.black.withValues(alpha: 0.8),
+              blurRadius: 4.0,
+              offset: const Offset(1.0, 1.0),
+            )
+          ],
+        ),
+      ),
       onPressed: onPressed,
     );
   }
+
+  Widget _buildRotatedTextButton(BuildContext context, {required int turns, required String text, required VoidCallback onPressed}) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: AnimatedRotation(
+        turns: turns * 0.25,
+        duration: const Duration(milliseconds: 300),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white, width: 1.5),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.5),
+                blurRadius: 4.0,
+                offset: const Offset(1.0, 1.0),
+              )
+            ],
+          ),
+          child: Text(text, style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+            shadows: [
+                  Shadow(
+                    color: Colors.black,
+                    blurRadius: 3.0,
+                    offset: Offset(1.0, 1.0),
+                  )
+                ],
+              )
+            ),
+          ),
+        ),
+      );
+    }
 
   Widget _buildThumbnail(BuildContext context, int turns, XFile? recentPhoto) {
     Widget content;
@@ -226,32 +307,42 @@ class _CameraViewState extends State<CameraView> {
 
     return GestureDetector(
       onTap: () async {
-        if (recentPhoto != null) {
-          final filePath = recentPhoto.path;
-          try {
-            final result = await OpenFilex.open(filePath);
-            if (result.type != ResultType.done) {
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('갤러리 앱을 열 수 없습니다: ${result.message}')));
-            }
-          } catch (e) {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('오류 발생: ${e.toString()}')));
-          }
+        final viewModel = context.read<CameraViewModel>();
+        if (viewModel.sessionPhotos.isNotEmpty) {
+          await viewModel.pauseInference(); // 카메라 프리뷰 일시 정지
+
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const GalleryScreen()),
+          );
+
+          viewModel.resumeInference(); // 카메라 프리뷰 재개
         } else {
-          if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('최근 촬영한 사진이 없습니다.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('아직 촬영한 사진이 없습니다.')),
+          );
         }
       },
-      child: Container(
-        width: 60,
-        height: 60,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.5), // 🚀 최신 문법!
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 2),
+      child: AnimatedRotation(
+        turns: turns * 0.25,
+        duration: const Duration(milliseconds: 300),
+        child: Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.5),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.5),
+                blurRadius: 4.0,
+                offset: const Offset(1.0, 1.0),
+              )
+            ],
+          ),
+          child: Center(child: content),
         ),
-        child: Center(child: content),
       ),
     );
   }
