@@ -1,35 +1,57 @@
-# Flutter 및 Dart 관련 파일
-build/
+# Flutter / Dart 자동 생성 파일
 .dart_tool/
 .packages
 .metadata
-.dart_tool/*
 .flutter-plugins
+.flutter-plugins-dependencies
+symlinked-plugins/
+build/
 
+# AI 모델 바이너리 (대용량 — Git LFS 또는 별도 배포)
+assets/models/*.onnx
+assets/models/*.tflite
+assets/models/*.pt
+assets/models/*.pth
 
 # IDE 및 편집기 설정
 .idea/
 *.iml
 *.iws
-.vscode/*
+.vscode/
+*.code-workspace
 
-# 빌드 및 생성 파일
+# 빌드 산출물
 app.apk
 app.aab
 app.ipa
-symlinked-plugins/
-build/*
-
-# iOS 빌드 아티팩트
-ios/*
+*.apk
+*.aab
+*.ipa
 
 # Android 빌드 아티팩트
 android/.gradle/
 android/build/
 android/app/build/
 android/app/src/main/assets/flutter_assets/
+android/local.properties
+local.properties
+
+# 서명 키 (절대 커밋 금지)
 *.keystore
 *.jks
+key.properties
+
+# iOS 빌드 아티팩트
+ios/
+Pods/
+*.xcworkspace
+*.xcuserdata
+DerivedData/
+
+# 플랫폼 폴더 (Android/iOS 집중)
+/windows/
+/macos/
+/linux/
 
 # 운영체제 생성 파일
 .DS_Store
@@ -39,10 +61,23 @@ android/app/src/main/assets/flutter_assets/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
+# AI 도구 로컬 설정
+.claude/
 
-# Windows, macOS, Linux 플랫폼 폴더 전체를 무시합니다. (Android/iOS에만 집중)
-/windows/
-/macos/
-/linux/
-# (web/ 폴더는 크롬 테스트를 위해 제외)
+# Jupyter Notebook (프로젝트와 무관)
+*.ipynb
+
+# 환경 변수 / 시크릿
+.env
+.env.*
+secrets.json
+
+# 커버리지 / 테스트 결과
+coverage/
+*.lcov
+
+# pub cache
+.pub-cache/
+.pub/

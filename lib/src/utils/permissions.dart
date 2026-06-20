@@ -8,26 +8,20 @@ class Permissions {
   /// 카메라 및 저장소 권한을 요청합니다.
   /// 갤러리 저장을 위해 `Permission.storage` (Android) 또는 `Permission.photos` (iOS)가 필요합니다.
   static Future<bool> requestCameraAndStoragePermissions() async {
-    // 카메라 권한 요청
-    var cameraStatus = await Permission.camera.request();
+    // 세 권한을 한 번에 요청합니다.
+    // Permission.photos  → Android 13+ (READ_MEDIA_IMAGES) / iOS
+    // Permission.storage → Android 12 이하 (READ_EXTERNAL_STORAGE)
+    // 두 저장소 권한 중 하나라도 허용되면 갤러리 저장 가능합니다.
+    final statuses = await [
+      Permission.camera,
+      Permission.photos,
+      Permission.storage,
+    ].request();
 
-    // 갤러리 접근(저장) 권한 요청
-    // Android 13 이상에서는 photos, 그 이하는 storage
-    // iOS에서는 photos
-    Permission storagePermission = Permission.photos;
-    if (await Permission.storage.isDenied) {
-       storagePermission = Permission.storage;
-    }
-    
-    var storageStatus = await storagePermission.request();
+    final cameraOk  = statuses[Permission.camera]?.isGranted  ?? false;
+    final photosOk  = statuses[Permission.photos]?.isGranted  ?? false;
+    final storageOk = statuses[Permission.storage]?.isGranted ?? false;
 
-    if (cameraStatus.isGranted && storageStatus.isGranted) {
-      return true;
-    } else {
-      // 권한이 하나라도 거부된 경우
-      // 사용자가 직접 설정에서 켜도록 유도할 수 있습니다.
-      // openAppSettings(); 
-      return false;
-    }
+    return cameraOk && (photosOk || storageOk);
   }
 }

@@ -129,7 +129,10 @@ class _CameraViewState extends State<CameraView> {
                     child: SizedBox(
                       width: 1000,
                       height: 1000 / portraitAspect,
-                      child: CameraPreview(controller),
+                      child: CameraPreview(
+                        key: ValueKey(viewModel.cameraService.selectedCameraIndex),
+                        controller,
+                      ),
                     ),
                   ),
                 ),
@@ -309,14 +312,15 @@ class _CameraViewState extends State<CameraView> {
       onTap: () async {
         final viewModel = context.read<CameraViewModel>();
         if (viewModel.sessionPhotos.isNotEmpty) {
-          await viewModel.pauseInference(); // 카메라 프리뷰 일시 정지
+          await viewModel.pauseInference();
 
+          if (!context.mounted) return;
           await Navigator.push(
             context,
             MaterialPageRoute(builder: (context) => const GalleryScreen()),
           );
 
-          viewModel.resumeInference(); // 카메라 프리뷰 재개
+          await viewModel.resumeInference();
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('아직 촬영한 사진이 없습니다.')),

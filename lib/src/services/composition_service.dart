@@ -1,4 +1,3 @@
-// Received object's bounding box, class index, and confidence score from TFLiteService and provides methods to access these properties. (DetectionResult)
 // lib/src/services/composition_service.dart
 
 import 'dart:ui';

@@ -18,6 +18,8 @@ class CameraService with ChangeNotifier {
 
   CameraController? get controller => _controller;
   bool get isCameraInitialized => _isCameraInitialized;
+  int get selectedCameraIndex => _selectedCameraIdx;
+  int get cameraCount => _cameras.length;
 
   CameraService();
 
@@ -76,13 +78,24 @@ class CameraService with ChangeNotifier {
   }
 
   Future<void> switchCamera() async {
-    if (_cameras.isEmpty) return;
-    bool wasStreaming = _isStreamingImages;
-    if (wasStreaming) await stopImageStream();
+    if (_cameras.length < 2) {
+      log('카메라가 1개뿐이라 전환 불가.');
+      return;
+    }
 
-    _selectedCameraIdx = (_selectedCameraIdx + 1) % _cameras.length; 
+    if (_isStreamingImages) await stopImageStream();
+
+    _isCameraInitialized = false;
+    if (_controller != null) {
+      _controller!.removeListener(_onControllerValueChanged);
+      await _controller!.dispose();
+      _controller = null;
+    }
+    notifyListeners(); // 전환 중 로딩 상태를 UI에 즉시 반영
+
+    _selectedCameraIdx = (_selectedCameraIdx + 1) % _cameras.length;
+    log('카메라 전환: 총 ${_cameras.length}개, 인덱스 → $_selectedCameraIdx (${_cameras[_selectedCameraIdx].lensDirection.name})');
     await initializeCamera(cameraIdx: _selectedCameraIdx);
-    notifyListeners();
   }
 
   void _onControllerValueChanged() {

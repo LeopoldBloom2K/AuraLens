@@ -6,7 +6,9 @@ import 'package:flutter/services.dart'; // 화면 방향 고정을 위한 import
 import 'package:provider/provider.dart';
 import 'package:auralens/src/app.dart';
 import 'package:auralens/src/services/camera_service.dart';
-import 'package:auralens/src/services/tflite_service.dart';
+import 'package:auralens/src/services/inference_service.dart';
+import 'package:auralens/src/services/model_gate.dart';
+import 'package:auralens/src/utils/permissions.dart';
 
 void main() async {
   // Flutter 앱 실행 전 네이티브 바인딩 보장
@@ -17,15 +19,21 @@ void main() async {
     DeviceOrientation.portraitUp,
   ]);
 
-  // TFLite 모델 로드 (앱 시작 시 한 번만)
-  final tfliteService = TFLiteService();
-  await tfliteService.initialize();
+  // 카메라·저장소 권한 요청 — 카메라 초기화보다 먼저 실행
+  await Permissions.requestCameraAndStoragePermissions();
+
+  // 모델 파일 존재 여부 확인 (게이트) — 반드시 InferenceService 보다 먼저 실행
+  await ModelGate.probe();
+
+  // ONNX 모델 로드 — ModelGate.isReady == true 일 때만 실제 초기화됨
+  final inferenceService = InferenceService();
+  await inferenceService.initialize();
 
   // 앱 실행
   runApp(
     MultiProvider(
       providers: [
-        Provider<TFLiteService>.value(value: tfliteService), // TFLiteService를 Provider로 제공
+        Provider<InferenceService>.value(value: inferenceService),
         // CameraService를 ChangeNotifierProvider로 제공
         ChangeNotifierProvider(
           create: (_) => CameraService()..initializeCamera(), // 앱 시작 시 카메라 초기화
@@ -33,7 +41,7 @@ void main() async {
         ChangeNotifierProvider(
           create: (context) => CameraViewModel(
             context.read<CameraService>(),
-            context.read<TFLiteService>(),
+            context.read<InferenceService>(),
           )
         ),
       ],

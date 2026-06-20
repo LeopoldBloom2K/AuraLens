@@ -7,13 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:auralens/src/services/camera_service.dart';
-import 'package:auralens/src/services/tflite_service.dart';
+import 'package:auralens/src/services/inference_service.dart';
 import 'package:auralens/src/utils/image_converter.dart';
 import 'package:auralens/src/models/camera_settings.dart'; 
 
 class CameraViewModel with ChangeNotifier {
   final CameraService _cameraService;
-  final TFLiteService _tfliteService;
+  final InferenceService _inferenceService;
 
   XFile? _recentPhoto;
 
@@ -75,7 +75,7 @@ class CameraViewModel with ChangeNotifier {
   DateTime _lastInferenceTime = DateTime.now();
   final int _inferenceIntervalMs = 500; 
 
-  CameraViewModel(this._cameraService, this._tfliteService) {
+  CameraViewModel(this._cameraService, this._inferenceService) {
     _cameraService.addListener(notifyListeners);
 
     if (_cameraService.isCameraInitialized) {
@@ -99,7 +99,7 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-  void _startModelInference() async {
+  Future<void> _startModelInference() async {
     final bool isCameraReady = _cameraService.controller?.value.isInitialized ?? false;
 
     if (!isCameraReady) {
@@ -138,7 +138,7 @@ class CameraViewModel with ChangeNotifier {
 
       try {
         final rawResult = await compute(ImageConverter.convertCameraImageToModelInput, cameraImage)
-            .then((inputMatrix) => _tfliteService.classifyScene(inputMatrix));
+            .then((inputMatrix) => _inferenceService.classifyScene(inputMatrix));
 
         _imageSize = Size(cameraImage.width.toDouble(), cameraImage.height.toDouble());
 
@@ -170,7 +170,7 @@ class CameraViewModel with ChangeNotifier {
         _isDetecting = false;
       }
     });
-    log('CameraViewModel: TFLite 추론 루프 시작 (쿨다운 0.5초) 🚀');
+    log('CameraViewModel: ONNX 추론 루프 시작 (쿨다운 0.5초) 🚀');
   }
 
   Future<void> takePicture() async {
@@ -209,11 +209,14 @@ class CameraViewModel with ChangeNotifier {
   }
 
   Future<void> switchCamera() async {
-    _isStreamingModel = false;                     // 카메라 전환 시 모델 추론 중지
-    _isDetecting = false;                          // 카메라 전환 시 추론 상태 초기화
-    _sceneHistory.clear();                         // 카메라 전환 시 투표 기록 초기화
-    
+    _isStreamingModel = false;
+    _isDetecting = false;
+    _sceneHistory.clear();
+
     await _cameraService.switchCamera();
+
+    // 전환 후 카메라가 초기화되면 추론 루프를 재시작합니다.
+    _startModelInference();
   }
 
   // 갤러리 진입 시: AI 프레임 공급 일시 정지
@@ -225,10 +228,10 @@ class CameraViewModel with ChangeNotifier {
   }
 
   // 갤러리에서 돌아왔을 때: AI 프레임 공급 재개
-  void resumeInference() {
+  Future<void> resumeInference() async {
     log('CameraViewModel: 카메라 복귀 - AI 연산 재개');
     if (!_isStreamingModel && _cameraService.isCameraInitialized) {
-      _startModelInference();
+      await _startModelInference();
     }
   }
 
