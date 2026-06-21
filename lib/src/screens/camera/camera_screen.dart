@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -28,25 +29,38 @@ class CameraView extends StatefulWidget {
   State<CameraView> createState() => _CameraViewState();
 }
 
-class _CameraViewState extends State<CameraView> {
+class _CameraViewState extends State<CameraView> with SingleTickerProviderStateMixin {
   DateTime? _currentBackPressTime;
   StreamSubscription<AccelerometerEvent>? _accelSubscription;
   int _iconTurns = 0;
 
+  late final AnimationController _glowController;
+  late final Animation<double> _glowAnimation;
+
   @override
   void initState() {
     super.initState();
-    // 🚀 수정 1: 가로 모드 아이콘 회전 방향을 현실과 맞게(반대로) 교정 완료!
+    _glowController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+
+    _glowAnimation = CurvedAnimation(
+      parent: _glowController,
+      curve: Curves.easeInOut,
+    );
+
+    // 가로 모드 아이콘 회전 방향을 현실과 맞게(반대로) 교정
     _accelSubscription = accelerometerEventStream().listen((AccelerometerEvent event) {
       int newTurns = _iconTurns;
       if (event.x > 5) {
-        newTurns = 1; // 폰을 왼쪽으로 눕힘 -> 아이콘은 시계방향 90도 회전
+        newTurns = 1;
       } else if (event.x < -5) {
-        newTurns = 3; // 폰을 오른쪽으로 눕힘 -> 아이콘은 반시계 90도 회전
+        newTurns = 3;
       } else if (event.y > 5) {
-        newTurns = 0; // 똑바로 세움
+        newTurns = 0;
       } else if (event.y < -5) {
-        newTurns = 2; // 거꾸로
+        newTurns = 2;
       }
 
       if (newTurns != _iconTurns) {
@@ -57,6 +71,7 @@ class _CameraViewState extends State<CameraView> {
 
   @override
   void dispose() {
+    _glowController.dispose();
     _accelSubscription?.cancel();
     super.dispose();
   }
@@ -148,13 +163,30 @@ class _CameraViewState extends State<CameraView> {
                     final widgetSize = Size(constraints.maxWidth, constraints.maxHeight);
                     viewModel.setScreenSize(widgetSize);
 
-                    return CustomPaint(
-                      painter: CompositionOverlayPainter(
-                        imageSize: viewModel.imageSize,
-                        widgetSize: widgetSize,
-                        isGridEnabled: viewModel.isGridEnabled,
-                        isAiAssistEnabled: viewModel.isAiAssistEnabled,
-                        currentScene: viewModel.currentScene,
+                    return GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (details) =>
+                          viewModel.onScreenTap(details.localPosition, widgetSize),
+                      child: Stack(
+                        children: [
+                          CustomPaint(
+                            size: widgetSize,
+                            painter: CompositionOverlayPainter(
+                              imageSize: viewModel.imageSize,
+                              widgetSize: widgetSize,
+                              isGridEnabled: viewModel.isGridEnabled,
+                              isAiAssistEnabled: viewModel.isAiAssistEnabled,
+                              currentScene: viewModel.currentScene,
+                              detectedBoundingBox: viewModel.detectedBoundingBox,
+                              compositionTarget: viewModel.compositionTarget,
+                              isCompositionCorrect: viewModel.isCompositionCorrect,
+                              glowAnimation: _glowAnimation,
+                            ),
+                          ),
+                          if (viewModel.isManualFocusActive &&
+                              viewModel.focusTapPoint != null)
+                            _buildFocusIndicator(viewModel.focusTapPoint!),
+                        ],
                       ),
                     );
                   },
@@ -184,12 +216,34 @@ class _CameraViewState extends State<CameraView> {
                       onPressed: () => viewModel.toggleGrid(!viewModel.isGridEnabled),
                     ),
                     const SizedBox(width: 16),
-                    _buildRotatedButton(
-                      context,
-                      turns: _iconTurns,
-                      icon: viewModel.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
-                      onPressed: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),
-                    ),
+                    if (kDebugMode)
+                      GestureDetector(
+                        onTap: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),
+                        onLongPress: () => viewModel.toggleDebugMode(),
+                        child: AnimatedRotation(
+                          turns: _iconTurns * 0.25,
+                          duration: const Duration(milliseconds: 300),
+                          child: Icon(
+                            viewModel.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
+                            color: viewModel.debugMode ? Colors.yellowAccent : Colors.white,
+                            size: 30,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black.withValues(alpha: 0.8),
+                                blurRadius: 4.0,
+                                offset: const Offset(1.0, 1.0),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      _buildRotatedButton(
+                        context,
+                        turns: _iconTurns,
+                        icon: viewModel.isAiAssistEnabled ? Icons.insights : Icons.insights_outlined,
+                        onPressed: () => viewModel.toggleAiAssist(!viewModel.isAiAssistEnabled),
+                      ),
                     const SizedBox(width: 16),
                     _buildRotatedButton(
                       context,
@@ -237,10 +291,83 @@ class _CameraViewState extends State<CameraView> {
                   ],
                 ),
               ),
-            )
+            ),
+
+            // ── 디버그 컨트롤 패널 (kDebugMode + debugMode 일 때만 표시) ──────
+            if (kDebugMode && viewModel.debugMode)
+              _buildDebugPanel(context, viewModel),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildDebugPanel(BuildContext context, CameraViewModel viewModel) {
+    final sceneIcon = switch (viewModel.currentScene) {
+      _ when viewModel.currentScene.name == 'person'  => ('인물', Colors.lightBlueAccent),
+      _ when viewModel.currentScene.name == 'food'    => ('음식', Colors.amberAccent),
+      _ when viewModel.currentScene.name == 'scenery' => ('풍경', Colors.greenAccent),
+      _                                               => ('??',   Colors.white),
+    };
+    final compState = viewModel.isCompositionCorrect ? '구도 OK ✓' : '구도 NG →';
+
+    return Positioned(
+      bottom: 130,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.yellowAccent.withValues(alpha: 0.6), width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('DEBUG', style: TextStyle(color: Colors.yellowAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: viewModel.debugCycleScene,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: sceneIcon.$2.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: sceneIcon.$2, width: 1),
+                  ),
+                  child: Text(sceneIcon.$1, style: TextStyle(color: sceneIcon.$2, fontSize: 13, fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: viewModel.debugToggleComposition,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: (viewModel.isCompositionCorrect ? Colors.greenAccent : Colors.white).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: viewModel.isCompositionCorrect ? Colors.greenAccent : Colors.white54,
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(compState, style: TextStyle(
+                    color: viewModel.isCompositionCorrect ? Colors.greenAccent : Colors.white70,
+                    fontSize: 13,
+                  )),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: viewModel.toggleDebugMode,
+                child: const Icon(Icons.close, color: Colors.white54, size: 18),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -299,6 +426,25 @@ class _CameraViewState extends State<CameraView> {
         ),
       );
     }
+
+  Widget _buildFocusIndicator(Offset tapPoint) {
+    return Positioned(
+      left: tapPoint.dx - 32,
+      top: tapPoint.dy - 32,
+      child: IgnorePointer(
+        child: Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Colors.yellowAccent.withValues(alpha: 0.85),
+              width: 2.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildThumbnail(BuildContext context, int turns, XFile? recentPhoto) {
     Widget content;

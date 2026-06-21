@@ -138,6 +138,34 @@ class CameraService with ChangeNotifier {
     }
   }
 
+  Future<void> setFocusAndExposure(Offset normalizedPoint) async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    try {
+      if (_controller!.value.focusPointSupported) {
+        await _controller!.setFocusMode(FocusMode.locked);
+        await _controller!.setFocusPoint(normalizedPoint);
+      }
+      if (_controller!.value.exposurePointSupported) {
+        await _controller!.setExposureMode(ExposureMode.locked);
+        await _controller!.setExposurePoint(normalizedPoint);
+      }
+    } catch (e) {
+      log('포커스/노출 설정 실패: $e');
+    }
+  }
+
+  Future<void> resetAutoFocusExposure() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    try {
+      await _controller!.setFocusMode(FocusMode.auto);
+      await _controller!.setFocusPoint(null);
+      await _controller!.setExposureMode(ExposureMode.auto);
+      await _controller!.setExposurePoint(null);
+    } catch (e) {
+      log('포커스/노출 리셋 실패: $e');
+    }
+  }
+
   Future<void> updateCameraResolution(CameraResolution newResolution) async {
     if (_controller == null) return;
     if (_currentResolution == newResolution) return; 
