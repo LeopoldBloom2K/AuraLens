@@ -46,34 +46,44 @@ class CameraService with ChangeNotifier {
         log('사용 가능한 카메라가 없습니다.');
         return;
       }
-      
+
       if (cameraIdx < 0 || cameraIdx >= _cameras.length) {
-        cameraIdx = 0; 
+        cameraIdx = 0;
       }
       _selectedCameraIdx = cameraIdx;
 
-      ResolutionPreset preset = _getResolutionPreset(_currentResolution);
+      final ResolutionPreset preset = _getResolutionPreset(_currentResolution);
 
-      _controller = CameraController(
-        _cameras[_selectedCameraIdx], 
-        preset, 
+      // 로컬 참조로 경쟁 조건 방지: initialize() 대기 중 switchCamera()가
+      // 재호출되면 _controller가 교체되므로 참조 불일치로 감지할 수 있음.
+      final newController = CameraController(
+        _cameras[_selectedCameraIdx],
+        preset,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420, 
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
+      _controller = newController;
 
-      await _controller!.initialize();
-      
-      // 카메라 방향 고정 (세로 모드) 
-      await _controller!.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      await newController.initialize();
+
+      // initialize() 대기 중 switchCamera()가 호출되어 _controller가 바뀐 경우 폐기
+      if (_controller != newController) {
+        log('initializeCamera: 전환 경쟁 감지 — 구 컨트롤러 폐기');
+        await newController.dispose();
+        return;
+      }
+
+      // 카메라 방향 고정 (세로 모드)
+      await newController.lockCaptureOrientation(DeviceOrientation.portraitUp);
 
       _isCameraInitialized = true;
-      _controller!.addListener(_onControllerValueChanged);
+      newController.addListener(_onControllerValueChanged);
 
     } on CameraException catch (e) {
       log('카메라 초기화 실패: $e');
       _isCameraInitialized = false;
     } finally {
-      notifyListeners(); 
+      notifyListeners();
     }
   }
 
@@ -84,6 +94,9 @@ class CameraService with ChangeNotifier {
     }
 
     if (_isStreamingImages) await stopImageStream();
+
+    // 전환 전 노출/포커스를 AUTO로 리셋 — 새 카메라가 올바른 AE 상태로 시작하도록 보장
+    await resetAutoFocusExposure();
 
     _isCameraInitialized = false;
     if (_controller != null) {

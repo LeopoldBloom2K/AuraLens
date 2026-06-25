@@ -91,7 +91,9 @@ class _CameraViewState extends State<CameraView> with SingleTickerProviderStateM
             const SnackBar(content: Text('뒤로 가기 버튼을 한 번 더 누르면 앱이 종료됩니다.'), duration: Duration(seconds: 2)),
           );
         } else {
-          SystemNavigator.pop();
+          context.read<CameraViewModel>().pauseInference().then((_) {
+            SystemNavigator.pop();
+          });
         }
       },
       child: Scaffold(
@@ -181,6 +183,12 @@ class _CameraViewState extends State<CameraView> with SingleTickerProviderStateM
                               compositionTarget: viewModel.compositionTarget,
                               isCompositionCorrect: viewModel.isCompositionCorrect,
                               glowAnimation: _glowAnimation,
+                              compositionType: viewModel.bestCompositionType,
+                              compositionScore: viewModel.compositionScore,
+                              colorHarmony: viewModel.colorHarmony,
+                              aestheticScore: viewModel.aestheticScore,
+                              nosePoint: viewModel.nosePoint,
+                              rotationTurns: _iconTurns,
                             ),
                           ),
                           if (viewModel.isManualFocusActive &&

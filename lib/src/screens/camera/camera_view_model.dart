@@ -4,16 +4,18 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 import 'dart:math' show sqrt;
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:gallery_saver_plus/gallery_saver.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:auralens/src/services/camera_service.dart';
 import 'package:auralens/src/services/inference_service.dart';
+import 'package:auralens/src/services/aesthetic_service.dart';
 import 'package:auralens/src/services/composition_service.dart';
+import 'package:auralens/src/services/color_harmony_service.dart';
 import 'package:auralens/src/utils/image_converter.dart';
 import 'package:auralens/src/utils/coordinate_scaler.dart';
 import 'package:auralens/src/models/camera_settings.dart';
@@ -42,18 +44,35 @@ class CameraViewModel with ChangeNotifier {
 
   bool _isStreamingModel = false;
   DateTime _lastInferenceTime = DateTime.now();
-  final int _inferenceIntervalMs = 500;
+  final int _inferenceIntervalMs = 750;
 
   // ── Stage 1~3: ML Kit + CompositionService 상태 ──────────────────────────
 
   late final ObjectDetector _objectDetector;
+  late final FaceDetector _faceDetector;
   final CompositionService _compositionService = CompositionService();
 
-  Rect?   _detectedBoundingBox;   // 위젯 좌표계 바운딩 박스
-  Offset? _compositionTarget;     // 가장 가까운 파워포인트
-  bool    _isCompositionCorrect = false;
-  Size    _screenSize = Size.zero;
-  Size?   _imageSize;
+  // 코 랜드마크 위치 (person 씬 구도 기준점)
+  Offset? _nosePoint;
+
+  Rect?              _detectedBoundingBox;
+  CompositionResult? _bestComposition;  // evaluateAll() 최고점 결과
+  Size               _screenSize = Size.zero;
+  Size?              _imageSize;
+
+  // 구도 일치 판정 임계값 (Gaussian score ≥ 0.72 → 화면 너비 약 10% 이내)
+  static const double _goodThreshold = 0.72;
+
+  // ── 색상 조화 분석 상태 ────────────────────────────────────────────────────
+  ColorHarmonyResult? _colorHarmony;
+  DateTime _lastHarmonyTime = DateTime.fromMillisecondsSinceEpoch(0);
+  static const int _harmonyIntervalMs = 5000;
+
+  // ── 미학 품질 점수 상태 ────────────────────────────────────────────────────
+  final AestheticService _aestheticService = AestheticService();
+  double? _aestheticScore;
+  DateTime _lastAestheticTime = DateTime.fromMillisecondsSinceEpoch(0);
+  static const int _aestheticIntervalMs = 8000;
 
   // ── 수동 포커스 / 자동 포커스 상태 ──────────────────────────────────────────
 
@@ -121,22 +140,48 @@ class CameraViewModel with ChangeNotifier {
       _debugMode ? _debugBox : _detectedBoundingBox;
 
   Offset? get compositionTarget =>
-      _debugMode ? (_debugCompositionCorrect ? null : _debugTarget) : _compositionTarget;
+      _debugMode ? (_debugCompositionCorrect ? null : _debugTarget)
+                 : _bestComposition?.targetPoint;
 
   bool get isCompositionCorrect =>
-      _debugMode ? _debugCompositionCorrect : _isCompositionCorrect;
+      _debugMode ? _debugCompositionCorrect
+                 : (_bestComposition?.score ?? 0.0) >= _goodThreshold;
+
+  CompositionType? get bestCompositionType =>
+      _debugMode ? CompositionType.ruleOfThirds : _bestComposition?.type;
+
+  double get compositionScore =>
+      _debugMode ? (_debugCompositionCorrect ? 0.9 : 0.3)
+                 : (_bestComposition?.score ?? 0.0);
 
   bool    get isManualFocusActive => _isManualFocusActive;
   Offset? get focusTapPoint       => _focusTapPoint;
 
+  ColorHarmonyResult? get colorHarmony => _debugMode ? null : _colorHarmony;
+
+  double? get aestheticScore => _debugMode ? null : _aestheticScore;
+
+  Offset? get nosePoint => _debugMode ? null : _nosePoint;
+
   // ── 생성자 ───────────────────────────────────────────────────────────────
 
   CameraViewModel(this._cameraService, this._inferenceService) {
+    _aestheticService.initialize();
+
     _objectDetector = ObjectDetector(
       options: ObjectDetectorOptions(
-        mode: DetectionMode.stream,
-        classifyObjects: false,   // 분류는 ONNX가 담당
-        multipleObjects: false,   // 주 피사체 1개만 추적
+        mode: DetectionMode.single,
+        classifyObjects: false,
+        multipleObjects: false,
+      ),
+    );
+
+    _faceDetector = FaceDetector(
+      options: FaceDetectorOptions(
+        performanceMode: FaceDetectorMode.fast,
+        enableLandmarks: true,   // 코 랜드마크 활성화
+        enableClassification: false,
+        enableTracking: false,
       ),
     );
 
@@ -210,11 +255,15 @@ class CameraViewModel with ChangeNotifier {
         }
       }
 
+      // camera_android_camerax는 전·후면 모두 90° 기준으로 프레임을 전달함.
+      // 센서 방향(270°)을 그대로 쓰면 전면 감지 실패 → 항상 90° 사용.
+      final rotation = InputImageRotation.rotation90deg;
+
       return InputImage.fromBytes(
         bytes: nv21,
         metadata: InputImageMetadata(
           size: Size(w.toDouble(), h.toDouble()),
-          rotation: InputImageRotation.rotation90deg,
+          rotation: rotation,
           format: InputImageFormat.nv21,
           bytesPerRow: w,
         ),
@@ -225,7 +274,86 @@ class CameraViewModel with ChangeNotifier {
     }
   }
 
-  // ── Stage 1~3: ML Kit 감지 + CompositionService 연결 ────────────────────
+  // ── Stage 1~3: person 씬 — FaceDetector로 얼굴+코 추적 ──────────────────
+
+  Future<void> _runFaceDetection(CameraImage cameraImage) async {
+    if (_screenSize == Size.zero) return;
+
+    final inputImage = _buildInputImage(cameraImage);
+    if (inputImage == null) return;
+
+    // camera_android_camerax 는 항상 90° 기준 → width/height 항상 스왑
+    final rotatedSize = Size(cameraImage.height.toDouble(), cameraImage.width.toDouble());
+    final isFront = _cameraService.controller?.description.lensDirection
+        == CameraLensDirection.front;
+
+    try {
+      final faces = await _faceDetector.processImage(inputImage);
+
+      if (faces.isEmpty) {
+        _detectedBoundingBox = null;
+        _nosePoint = null;
+        if (!_isManualFocusActive) _bestComposition = null;
+        return;
+      }
+
+      // 가장 큰 얼굴 선택
+      faces.sort((a, b) =>
+          (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+
+      final face = faces.first;
+
+      var bbox = scaleRect(
+        rect: face.boundingBox,
+        imageSize: rotatedSize,
+        widgetSize: _screenSize,
+      );
+
+      // 코 랜드마크 → 위젯 좌표로 변환
+      final noseLM = face.landmarks[FaceLandmarkType.noseBase];
+      Offset? nose;
+      if (noseLM != null) {
+        final noseRaw = Offset(noseLM.position.x.toDouble(), noseLM.position.y.toDouble());
+        nose = scaleOffset(offset: noseRaw, imageSize: rotatedSize, widgetSize: _screenSize);
+      }
+
+      // 전면 카메라: X축 좌우 반전 (프리뷰가 미러링되어 있으므로 좌표도 맞춰야 함)
+      if (isFront) {
+        final W = _screenSize.width;
+        bbox = Rect.fromLTRB(W - bbox.right, bbox.top, W - bbox.left, bbox.bottom);
+        if (nose != null) nose = Offset(W - nose.dx, nose.dy);
+      }
+
+      _detectedBoundingBox = bbox;
+      _nosePoint = nose ?? bbox.center;
+
+      // 코 위치를 구도 기준점으로 평가
+      if (!_isManualFocusActive && _nosePoint != null) {
+        final noseRect = Rect.fromCenter(center: _nosePoint!, width: 1, height: 1);
+        final results = _compositionService.evaluateAll(noseRect, _screenSize, scene: SceneCategory.person);
+        _bestComposition = results.isNotEmpty ? results.first : null;
+      }
+
+      // 색상 조화 분석
+      final nowH = DateTime.now();
+      if (nowH.difference(_lastHarmonyTime).inMilliseconds >= _harmonyIntervalMs) {
+        _lastHarmonyTime = nowH;
+        _analyzeColorHarmony(cameraImage, _detectedBoundingBox!, _screenSize);
+      }
+
+      if (!_isManualFocusActive && _nosePoint != null) {
+        _tryAutoFocus(_nosePoint!);
+      }
+    } catch (e) {
+      log('Face 감지 실패: $e');
+      _detectedBoundingBox = null;
+      _nosePoint = null;
+      _bestComposition = null;
+    }
+  }
+
+  // ── Stage 1~3: food 씬 — ObjectDetector로 음식 감지 ──────────────────────
 
   Future<void> _runObjectDetection(CameraImage cameraImage) async {
     if (_screenSize == Size.zero) return;
@@ -233,69 +361,95 @@ class CameraViewModel with ChangeNotifier {
     final inputImage = _buildInputImage(cameraImage);
     if (inputImage == null) return;
 
+    final rotatedSize = Size(
+      cameraImage.height.toDouble(),
+      cameraImage.width.toDouble(),
+    );
+
     try {
       final objects = await _objectDetector.processImage(inputImage);
 
       if (objects.isEmpty) {
         _detectedBoundingBox = null;
-        if (!_isManualFocusActive) _compositionTarget = null;
-        _isCompositionCorrect = false;
+        if (!_isManualFocusActive) _bestComposition = null;
         return;
       }
 
-      // 가장 큰 객체 선택
       objects.sort((a, b) =>
           (b.boundingBox.width * b.boundingBox.height)
               .compareTo(a.boundingBox.width * a.boundingBox.height));
 
-      // ML Kit rotation90deg 적용 후 좌표계는 이미지의 가로/세로가 교환됨
-      final rotatedSize = Size(
-        cameraImage.height.toDouble(),
-        cameraImage.width.toDouble(),
-      );
-
-      // Stage 2에서 그릴 바운딩 박스를 위젯 좌표로 변환
       _detectedBoundingBox = scaleRect(
         rect: objects.first.boundingBox,
         imageSize: rotatedSize,
         widgetSize: _screenSize,
       );
 
-      // Stage 3: 가장 가까운 파워포인트 찾기 (수동 모드에서는 덮어쓰지 않음)
       if (!_isManualFocusActive) {
-        _compositionTarget = _compositionService.findClosestPowerPoint(
-          _detectedBoundingBox!,
-          _screenSize,
+        final results = _compositionService.evaluateAll(
+          _detectedBoundingBox!, _screenSize,
+          scene: _currentScene,
         );
+        _bestComposition = results.isNotEmpty ? results.first : null;
       }
 
-      _isCompositionCorrect = _compositionService.isCompositionCorrect(
-        _detectedBoundingBox!,
-        _compositionTarget,
-        _screenSize,
-      );
+      final nowH = DateTime.now();
+      if (nowH.difference(_lastHarmonyTime).inMilliseconds >= _harmonyIntervalMs) {
+        _lastHarmonyTime = nowH;
+        _analyzeColorHarmony(cameraImage, _detectedBoundingBox!, _screenSize);
+      }
 
-      // 자동 포커스: 수동 포커스가 비활성 상태일 때만, 2초 간격 또는 피사체가 크게 이동한 경우
       if (!_isManualFocusActive) {
-        final subjectCenter = _detectedBoundingBox!.center;
-        final now = DateTime.now();
-        final movedFar = _lastAutoFocusPoint != null &&
-            (_lastAutoFocusPoint! - subjectCenter).distance > _screenSize.width * 0.15;
-        if (now.difference(_lastAutoFocusTime).inSeconds >= 2 || movedFar) {
-          _lastAutoFocusTime = now;
-          _lastAutoFocusPoint = subjectCenter;
-          _cameraService.setFocusAndExposure(Offset(
-            subjectCenter.dx / _screenSize.width,
-            subjectCenter.dy / _screenSize.height,
-          ));
-        }
+        _tryAutoFocus(_detectedBoundingBox!.center);
       }
     } catch (e) {
       log('ML Kit 감지 실패: $e');
       _detectedBoundingBox = null;
-      _compositionTarget = null;
-      _isCompositionCorrect = false;
+      _bestComposition = null;
     }
+  }
+
+  // ── 미학 품질 점수 (fire-and-forget) ────────────────────────────────────
+
+  void _scoreAesthetics(Float32List input) {
+    _aestheticService.score(input).then((score) {
+      if (!_isDisposed && score != null) {
+        _aestheticScore = score;
+        if (hasListeners) notifyListeners();
+      }
+    });
+  }
+
+  // ── 색상 조화 분석 (isolate) ─────────────────────────────────────────────
+
+  void _analyzeColorHarmony(CameraImage img, Rect box, Size scr) {
+    // CameraImage.planes[n].bytes는 native buffer 뷰일 수 있으므로
+    // Dart 힙에 복사한 뒤 isolate로 전달해 SendPort 실패 및 use-after-free 방지
+    final yP = img.planes[0];
+    final uP = img.planes[1];
+    final vP = img.planes[2];
+
+    compute(
+      ColorHarmonyService.analyze,
+      ColorHarmonyInput(
+        camW: img.width,
+        camH: img.height,
+        yBytes: Uint8List.fromList(yP.bytes),
+        uBytes: Uint8List.fromList(uP.bytes),
+        vBytes: Uint8List.fromList(vP.bytes),
+        yRowStride:  yP.bytesPerRow,
+        uvRowStride: uP.bytesPerRow,
+        uvPixStride: uP.bytesPerPixel ?? 2,
+        boxL: box.left,  boxT: box.top,
+        boxR: box.right, boxB: box.bottom,
+        scrW: scr.width, scrH: scr.height,
+      ),
+    ).then((result) {
+      if (!_isDisposed && result != null) {
+        _colorHarmony = result;
+        if (hasListeners) notifyListeners();
+      }
+    });
   }
 
   // ── 메인 추론 루프 ───────────────────────────────────────────────────────
@@ -314,9 +468,10 @@ class CameraViewModel with ChangeNotifier {
     _cameraService.startImageStream((CameraImage cameraImage) async {
       if (_isDisposed) return;
       if (!_isAiAssistEnabled) {
-        _compositionTarget = null;
-        _isCompositionCorrect = false;
+        _bestComposition = null;
         _detectedBoundingBox = null;
+        _colorHarmony = null;
+        _aestheticScore = null;
         _currentScene = SceneCategory.unknown;
         _sceneHistory.clear();
         notifyListeners();
@@ -334,11 +489,12 @@ class CameraViewModel with ChangeNotifier {
       _isDetecting = true;
 
       try {
-        // ONNX 장면 분류
-        final rawResult = await compute(
+        // ONNX 장면 분류 — modelInput을 미학 추론에도 재사용
+        final modelInput = await compute(
           ImageConverter.convertCameraImageToModelInput,
           cameraImage,
-        ).then((input) => _inferenceService.classifyScene(input));
+        );
+        final rawResult = await _inferenceService.classifyScene(modelInput);
 
         _imageSize = Size(
           cameraImage.width.toDouble(),
@@ -364,15 +520,37 @@ class CameraViewModel with ChangeNotifier {
           log('📸 [안정화 완료] 현재 촬영 상황: ${_currentScene.name}');
         }
 
-        // Stage 1~3: person·food 에서만 ML Kit 객체 감지 실행
+        // Stage 1~3: person → FaceDetector(코 추적), food → ObjectDetector
         // scenery는 피사체가 화면 전체이므로 바운딩 박스 불필요
-        if (stableScene == SceneCategory.person ||
-            stableScene == SceneCategory.food) {
+        if (stableScene == SceneCategory.person) {
+          await _runFaceDetection(cameraImage);
+        } else if (stableScene == SceneCategory.food) {
+          _nosePoint = null;
           await _runObjectDetection(cameraImage);
         } else {
+          // scenery: ML Kit 미사용, 화면 중앙 기준으로 구도 평가
           _detectedBoundingBox = null;
-          _compositionTarget = null;
-          _isCompositionCorrect = false;
+          if (!_isManualFocusActive && _screenSize != Size.zero) {
+            final center = Rect.fromCenter(
+              center: Offset(_screenSize.width / 2, _screenSize.height / 2),
+              width: 1, height: 1,
+            );
+            final results = _compositionService.evaluateAll(center, _screenSize, scene: stableScene);
+            _bestComposition = results.isNotEmpty ? results.first : null;
+            _colorHarmony = null;
+          }
+        }
+
+        // 미학 품질 평가 — person 씬에서만, 3초 쿨다운
+        if (stableScene == SceneCategory.person) {
+          final nowA = DateTime.now();
+          if (nowA.difference(_lastAestheticTime).inMilliseconds >=
+              _aestheticIntervalMs) {
+            _lastAestheticTime = nowA;
+            _scoreAesthetics(modelInput);
+          }
+        } else {
+          _aestheticScore = null;
         }
       } catch (e) {
         log('AI 추론 실패: $e');
@@ -382,7 +560,7 @@ class CameraViewModel with ChangeNotifier {
       }
     });
 
-    log('CameraViewModel: ONNX + ML Kit 추론 루프 시작 (쿨다운 0.5초)');
+    log('CameraViewModel: ONNX + ML Kit 추론 루프 시작 (쿨다운 0.75초)');
   }
 
   // ── 수동 포커스 / 구도 업데이트 ──────────────────────────────────────────
@@ -391,9 +569,18 @@ class CameraViewModel with ChangeNotifier {
     _isManualFocusActive = true;
     _focusTapPoint = localPosition;
 
-    // 탭한 위치 기준으로 가장 가까운 파워포인트를 구도 목표로 설정
-    final tapRect = Rect.fromCenter(center: localPosition, width: 1, height: 1);
-    _compositionTarget = _compositionService.findClosestPowerPoint(tapRect, widgetSize);
+    // 탭 위치 근처(화면 너비 15% 이내)에 ML Kit 감지 박스가 있으면 그 박스를,
+    // 없으면 탭 포인트 자체를 피사체로 삼아 구도 평가
+    final Rect subjectBox;
+    if (_detectedBoundingBox != null &&
+        _detectedBoundingBox!.inflate(widgetSize.width * 0.15).contains(localPosition)) {
+      subjectBox = _detectedBoundingBox!;
+    } else {
+      subjectBox = Rect.fromCenter(center: localPosition, width: 1, height: 1);
+    }
+
+    final tapResults = _compositionService.evaluateAll(subjectBox, widgetSize, scene: _currentScene);
+    _bestComposition = tapResults.isNotEmpty ? tapResults.first : null;
 
     // 정규화 좌표(0~1)로 카메라 포커스/노출 설정
     _cameraService.setFocusAndExposure(Offset(
@@ -402,6 +589,20 @@ class CameraViewModel with ChangeNotifier {
     ));
 
     notifyListeners();
+  }
+
+  // 2초 경과 또는 피사체가 화면 너비 15% 이상 이동 시 AF/AE 재설정
+  void _tryAutoFocus(Offset subjectCenter) {
+    final now      = DateTime.now();
+    final movedFar = _lastAutoFocusPoint != null &&
+        (_lastAutoFocusPoint! - subjectCenter).distance > _screenSize.width * 0.15;
+    if (now.difference(_lastAutoFocusTime).inSeconds < 2 && !movedFar) return;
+    _lastAutoFocusTime  = now;
+    _lastAutoFocusPoint = subjectCenter;
+    _cameraService.setFocusAndExposure(Offset(
+      subjectCenter.dx / _screenSize.width,
+      subjectCenter.dy / _screenSize.height,
+    ));
   }
 
   void _resetManualFocus() {
@@ -459,6 +660,11 @@ class CameraViewModel with ChangeNotifier {
   Future<void> setCameraResolution(CameraResolution resolution) async {
     if (_cameraResolution == resolution) return;
     _cameraResolution = resolution;
+    // 스트림을 재초기화하기 전에 플래그를 리셋해야 _onCameraServiceStateChanged에서
+    // 카메라 재초기화 완료 후 _startModelInference()를 호출할 수 있음.
+    // 이 플래그가 true인 채로 updateCameraResolution이 실행되면
+    // 스트림은 중단됐지만 _onCameraServiceStateChanged가 재시작을 건너뛰는 버그 발생.
+    _isStreamingModel = false;
     notifyListeners();
     log('카메라 해상도 변경: ${resolution.name}');
     await _cameraService.updateCameraResolution(resolution);
@@ -471,8 +677,14 @@ class CameraViewModel with ChangeNotifier {
     _focusTapPoint = null;
     _sceneHistory.clear();
     _detectedBoundingBox = null;
-    _compositionTarget = null;
-    _isCompositionCorrect = false;
+    _bestComposition = null;
+    _colorHarmony = null;
+    _aestheticScore = null;
+    _nosePoint = null;
+    // 새 카메라 AE 수렴 전에 포커스/노출이 잠기는 것을 막기 위해
+    // _lastAutoFocusTime을 현재 시각으로 리셋 → 전환 후 2초간 _tryAutoFocus 억제
+    _lastAutoFocusTime  = DateTime.now();
+    _lastAutoFocusPoint = null;
     await _cameraService.switchCamera();
     _startModelInference();
   }
@@ -511,6 +723,8 @@ class CameraViewModel with ChangeNotifier {
     log('CameraViewModel 해제');
     _accelSub?.cancel();
     _objectDetector.close();
+    _faceDetector.close();
+    _aestheticService.dispose();
     _cameraService.stopImageStream();
     _isStreamingModel = false;
     _cameraService.removeListener(notifyListeners);

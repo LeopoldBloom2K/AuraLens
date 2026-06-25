@@ -21,3 +21,21 @@ Rect scaleRect({
     rect.bottom * scale + offsetY,
   );
 }
+
+/// ML Kit 단일 좌표(Offset)를 위젯 좌표로 변환합니다.
+Offset scaleOffset({
+  required Offset offset,
+  required Size imageSize,
+  required Size widgetSize,
+}) {
+  final double scaleX = widgetSize.width / imageSize.width;
+  final double scaleY = widgetSize.height / imageSize.height;
+  final double scale = scaleX < scaleY ? scaleX : scaleY;
+  final double offsetX = (widgetSize.width - imageSize.width * scale) / 2.0;
+  final double offsetY = (widgetSize.height - imageSize.height * scale) / 2.0;
+
+  return Offset(
+    offset.dx * scale + offsetX,
+    offset.dy * scale + offsetY,
+  );
+}

@@ -41,6 +41,7 @@ dependencies:
   gallery_saver_plus: ^3.0.0
   path_provider: ^2.1.5
   google_mlkit_object_detection: ^0.15.1
+  google_mlkit_face_detection: ^0.13.2
   url_launcher: ^6.3.2
   open_filex: ^4.5.0
   sensors_plus: ^7.0.0
